@@ -63,25 +63,62 @@ const releaseDir = join(root, 'release')
 
 /*
   只挑这一版真正需要的文件，不整目录上传。
-  latest.yml 是必须项：缺了它客户端根本不知道有新版本，而这个失败是静默的
-  —— 用户只会看到「已是最新」，不会看到任何报错。
+
+  产物按平台分组，因为同一个版本往往在两台机器上分别打包：Windows 包在 Windows 上出，
+  mac 包在 mac 上出（原生模块要按目标平台的 ABI 编译，跨平台打不出可用的包）。
+  所以这里的必需性是「按平台」判断的：只要某个平台的安装包在，它的版本清单就必须在；
+  两个平台都不在才算真的没打包。
+
+  清单（latest.yml / latest-mac.yml）缺失的后果是静默的 —— 客户端不报错，
+  只会一直显示「已是最新版本」，所以这一项不能只当成可选附件。
 */
-const WANTED = [
-  { name: 'latest.yml', required: true, note: 'Windows 版本清单' },
-  { name: 'FlowProbe-Setup-' + version + '.exe', required: true, note: 'Windows 安装包' },
-  { name: 'FlowProbe-Setup-' + version + '.exe.blockmap', required: false, note: '增量更新块映射' },
-  { name: 'latest-mac.yml', required: false, note: 'macOS 版本清单' },
-  { name: 'FlowProbe-' + version + '-arm64.dmg', required: false, note: 'macOS Apple Silicon' },
-  { name: 'FlowProbe-' + version + '-x64.dmg', required: false, note: 'macOS Intel' },
-  { name: 'FlowProbe-' + version + '-arm64-mac.zip', required: false, note: 'macOS arm64 zip（自动更新用）' },
-  { name: 'FlowProbe-' + version + '-x64-mac.zip', required: false, note: 'macOS x64 zip（自动更新用）' }
+const PLATFORMS = [
+  {
+    key: 'Windows',
+    manifest: { name: 'latest.yml', note: 'Windows 版本清单' },
+    installers: [
+      { name: 'FlowProbe-Setup-' + version + '.exe', note: 'Windows 安装包' },
+      { name: 'FlowProbe-Setup-' + version + '.exe.blockmap', note: '增量更新块映射' }
+    ]
+  },
+  {
+    key: 'macOS',
+    manifest: { name: 'latest-mac.yml', note: 'macOS 版本清单' },
+    installers: [
+      { name: 'FlowProbe-' + version + '-arm64.dmg', note: 'macOS Apple Silicon 安装镜像' },
+      { name: 'FlowProbe-' + version + '-x64.dmg', note: 'macOS Intel 安装镜像' },
+      { name: 'FlowProbe-' + version + '-arm64-mac.zip', note: 'macOS arm64 zip（自动更新读的是 zip）' },
+      { name: 'FlowProbe-' + version + '-x64-mac.zip', note: 'macOS x64 zip（自动更新读的是 zip）' }
+    ]
+  }
 ]
 
 const files = []
-for (const w of WANTED) {
-  const p = join(releaseDir, w.name)
-  if (existsSync(p)) files.push({ ...w, path: p, size: statSync(p).size })
-  else if (w.required) die('找不到 ' + w.name + '。先执行 npm run dist 打包，再发布。')
+const present = []
+for (const plat of PLATFORMS) {
+  const found = []
+  for (const it of plat.installers) {
+    const fp = join(releaseDir, it.name)
+    if (existsSync(fp)) found.push({ ...it, path: fp, size: statSync(fp).size })
+  }
+  if (!found.length) continue
+  const mp = join(releaseDir, plat.manifest.name)
+  if (!existsSync(mp)) {
+    die(
+      '找到了 ' + plat.key + ' 安装包，但缺少 ' + plat.manifest.name + '。' +
+      '\n没有清单，客户端不会报错，只会一直显示「已是最新版本」。' +
+      '\n重新执行打包命令让 electron-builder 生成清单，再发布。'
+    )
+  }
+  files.push({ ...plat.manifest, path: mp, size: statSync(mp).size }, ...found)
+  present.push(plat.key)
+}
+
+if (!files.length) {
+  die(
+    'release/ 里没有 ' + version + ' 版本的安装包。' +
+    '\nWindows 上执行 npm run dist，macOS 上执行 npm run dist:mac，然后再发布。'
+  )
 }
 
 const api = 'https://api.github.com'
@@ -101,6 +138,7 @@ async function gh(path, init = {}) {
 }
 
 console.log('发布 ' + pkg.name + ' ' + tag + ' → ' + repo)
+console.log('  本机产物：' + present.join(' + ') + '（' + files.length + ' 个文件）')
 
 // 先确认仓库能访问，再动手：令牌权限不足时报在这里最容易理解
 const who = await gh('/repos/' + repo)
@@ -138,6 +176,19 @@ if (rel.status === 404) {
   die('查询 Release 失败（HTTP ' + rel.status + '）：' + JSON.stringify(rel.body))
 } else {
   console.log('  复用已存在的 Release ' + tag)
+  /*
+    补发另一个平台时把它的安装说明并进正文。
+    正文里没提到本次平台就 PATCH 一次；已经提到则原样保留，避免每次发布都改动正文。
+  */
+  const merged = mergeNotes(rel.body.body)
+  if (merged !== rel.body.body) {
+    const patched = await gh('/repos/' + repo + '/releases/' + rel.body.id, {
+      method: 'PATCH',
+      body: JSON.stringify({ body: merged })
+    })
+    if (patched.ok) console.log('  已把 ' + present.join(' + ') + ' 的安装说明并入 Release 正文')
+    else console.warn('  ⚠ 更新 Release 正文失败（HTTP ' + patched.status + '），附件仍会照常上传')
+  }
 }
 
 const relId = rel.body.id
@@ -242,15 +293,54 @@ function fmt(n) {
   return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i]
 }
 
-/** Release 说明。正文里带上「怎么装」，因为看到这个页面的人多半是来下载的 */
+/**
+ * Release 说明。正文里带上「怎么装」，因为看到这个页面的人多半是来下载的。
+ *
+ * 只写本次真正上传了的平台：同一版本可能分两次发布（Windows 先发、mac 后补），
+ * 正文里列一个还没上传的文件名，等于让人去点一个 404。
+ * 第二次发布时会复用同一个 Release，此时正文里已有的另一平台段落由 mergeNotes() 保留。
+ */
 function buildNotes() {
-  return [
-    '### FlowProbe ' + tag,
-    '',
-    'Windows：下载 `FlowProbe-Setup-' + version + '.exe` 双击安装。',
-    '',
+  const lines = ['### FlowProbe ' + tag, '']
+  if (present.includes('Windows')) {
+    lines.push('**Windows**：下载 `FlowProbe-Setup-' + version + '.exe` 双击安装。', '')
+  }
+  if (present.includes('macOS')) {
+    lines.push(
+      '**macOS**：Apple Silicon 下载 `FlowProbe-' + version + '-arm64.dmg`，Intel 下载 `FlowProbe-' + version + '-x64.dmg`，打开后拖进「应用程序」。',
+      '',
+      '首次打开若提示无法验证开发者，在「系统设置 → 隐私与安全性」里点一次「仍要打开」。',
+      ''
+    )
+  }
+  lines.push(
     '已装过旧版的话不用手动下载：打开应用 → 帮助 → 检查更新。',
     '',
-    '> `latest.yml` 是自动更新用的版本清单，不需要手动下载。'
-  ].join('\n')
+    '> `latest.yml` / `latest-mac.yml` 与 `.blockmap` 是自动更新用的清单与增量索引，不需要手动下载。'
+  )
+  return lines.join('\n')
+}
+
+/**
+ * 复用已有 Release 时合并正文。
+ *
+ * 场景：Windows 包先发，隔一会儿在 mac 上补发同一版本。若直接用新正文覆盖，
+ * 先发那一次写的 Windows 安装说明会消失；若完全不动，后补的 mac 说明又永远不出现。
+ * 所以按平台段落做并集：已有正文里没提到的平台段落才追加。
+ */
+function mergeNotes(oldBody) {
+  const fresh = buildNotes()
+  if (!oldBody || !oldBody.trim()) return fresh
+  /*
+    判断「已有正文是否讲过这个平台」按平台关键字，不按整行文本比对。
+    整行比对看着更严谨，实际很脆：改一个字（哪怕只是给平台名加粗）就会被判成缺失，
+    于是把同一个平台的说明追加第二遍 —— 实测踩过。
+  */
+  const missing = []
+  for (const line of fresh.split('\n')) {
+    if (line.startsWith('**Windows**') && !oldBody.includes('Windows')) missing.push(line, '')
+    if (line.startsWith('**macOS**') && !oldBody.includes('macOS')) missing.push(line, '')
+  }
+  if (!missing.length) return oldBody
+  return oldBody.trimEnd() + '\n\n' + missing.join('\n').trimEnd() + '\n'
 }
