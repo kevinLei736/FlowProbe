@@ -10,7 +10,7 @@
 
 - 平台：Windows / macOS / Linux（当前打包目标为 Windows x64）
 - 技术栈：Electron 31 + React 18 + TypeScript + Zustand，electron-vite 构建，electron-builder 打包
-- 当前版本：**1.21.0**
+- 当前版本：**1.21.3**
 
 ---
 
@@ -937,7 +937,7 @@ publish:
 - **地址由打包决定，而不是运行时可配**。见上文：可配置把发布方的一次性决定变成了每个使用者的必答题，而答错的反馈信号（404）没有区分度。
 - **不调用 `setFeedURL`**。地址已经在安装包内的 `app-update.yml` 里，库自己读得到。再设一遍等于让同一个地址有两个来源，两处不一致时排查成本极高。
 - **错误按原因分类，而不是笼统报「更新失败」**。「发布仓库里还没有正式版本」「找不到版本清单」「网络连不上」对应完全不同的动作。1.20.0 及更早的包里写的是占位域名 `update.invalid`，客户端认得它并回「发布方尚未启用更新服务」，而不是抛一个域名解析错误 —— 后者是在向用户报告一件与他无关的事。
-- **产物名固定为纯 ASCII 且不含空格**（`FlowProbe-Setup-1.21.0.exe`）。默认产物名会带空格，而分发环节（GitHub Releases 上传等）会改写文件名，`latest.yml` 里记的却是原始名字，一旦被改写下载就必然 404。
+- **产物名固定为纯 ASCII 且不含空格**（`FlowProbe-Setup-1.21.3.exe`）。默认产物名会带空格，而分发环节（GitHub Releases 上传等）会改写文件名，`latest.yml` 里记的却是原始名字，一旦被改写下载就必然 404。
 - **状态用一个扁平的 phase 字段，而不是一堆布尔量**。「正在查 / 有新版 / 正在下 / 下好了 / 已是最新 / 出错了」本质是互斥的六种状态，用布尔量组合迟早出现「既在下载又已是最新」的矛盾组合，界面就得写一堆优先级判断。
 - **`electron-updater` 惰性引入，不放在文件顶部**。源码运行时它的构造过程本身就可能抛错，顶层 import 会连累主进程起不来 —— 为了一个可选功能拖垮整个应用不值得。
 - **失败原因翻成中文处置建议**，而不是把 `net::ERR_NAME_NOT_RESOLVED`、`sha512 mismatch` 原样丢出来。这里要留意更新请求走的是 Electron 的 `net` 模块，报的是 Chromium 错误码而不是 Node 的 `ENOTFOUND`，两套都得认。地址不可配之后，这些提示一律不再让用户「检查地址」—— 他没有地址可改，能做的只有查网络或者等发布方修好服务器。
@@ -1006,18 +1006,18 @@ npm run dist
 
 | 文件 | 说明 |
 |------|------|
-| `FlowProbe-Setup-1.21.0.exe` | NSIS 安装程序（约 86MB），可选安装目录、创建桌面与开始菜单快捷方式 |
-| `FlowProbe-Setup-1.21.0.exe.blockmap` | 增量更新用的块映射文件 |
+| `FlowProbe-Setup-1.21.3.exe` | NSIS 安装程序（约 86MB），可选安装目录、创建桌面与开始菜单快捷方式 |
+| `FlowProbe-Setup-1.21.3.exe.blockmap` | 增量更新用的块映射文件 |
 | `latest.yml` | 自动更新用的版本清单。发布时必须与安装包一起上传，缺它客户端查不到新版本 |
 
 在 macOS 上执行 `npm run dist:mac` 时，`release/` 下还会出现：
 
 | 文件 | 说明 |
 | --- | --- |
-| `FlowProbe-1.21.0-arm64.dmg` | Apple Silicon 安装镜像，双击拖入「应用程序」 |
-| `FlowProbe-1.21.0-x64.dmg` | Intel 安装镜像 |
-| `FlowProbe-1.21.0-arm64-mac.zip` | Apple Silicon 免安装压缩包（macOS 自动更新用的也是 zip）|
-| `FlowProbe-1.21.0-x64-mac.zip` | Intel 免安装压缩包 |
+| `FlowProbe-1.21.3-arm64.dmg` | Apple Silicon 安装镜像，双击拖入「应用程序」 |
+| `FlowProbe-1.21.3-x64.dmg` | Intel 安装镜像 |
+| `FlowProbe-1.21.3-arm64-mac.zip` | Apple Silicon 免安装压缩包（macOS 自动更新用的也是 zip）|
+| `FlowProbe-1.21.3-x64-mac.zip` | Intel 免安装压缩包 |
 | `win-unpacked/` | 免安装绿色版，直接运行其中的 `FlowProbe.exe` |
 
 ### 打包配置说明
@@ -1072,7 +1072,7 @@ icns 就是「8 字节魔数 + 若干 `类型 + 长度 + PNG` 块」的容器格
 
 ### 改名与数据兼容
 
-1.19.0 把应用标识从 `debug-toolbox` 改成 `flowprobe`（数据目录随之变化），1.21.0 进一步把显示名统一为英文 `FlowProbe`。前者牵动三处对老用户可见的东西，各自的处置如下。
+1.19.0 把应用标识从 `debug-toolbox` 改成 `flowprobe`（数据目录随之变化），1.21.3 进一步把显示名统一为英文 `FlowProbe`。前者牵动三处对老用户可见的东西，各自的处置如下。
 
 | 受影响的东西 | 为什么会受影响 | 处置 |
 | --- | --- | --- |

@@ -154,18 +154,8 @@ for (const f of files) {
     if (!del.ok && del.status !== 404) die('删除旧附件 ' + f.name + ' 失败（HTTP ' + del.status + '）')
     console.log('  替换 ' + f.name)
   }
-  const up = 'https://uploads.github.com/repos/' + repo + '/releases/' + relId + '/assets?name=' + encodeURIComponent(f.name)
-  const res = await fetch(up, {
-    method: 'POST',
-    headers: {
-      ...headers,
-      'content-type': 'application/octet-stream',
-      'content-length': String(f.size)
-    },
-    // 流式上传：安装包接近百兆，整体读进内存没必要
-    body: createReadStream(f.path),
-    duplex: 'half'
-  })
+  const up = uploadUrl(f.name)
+  const res = await uploadAsset(up, f)
   if (!res.ok) {
     const t = await res.text()
     die('上传 ' + f.name + ' 失败（HTTP ' + res.status + '）：' + t)
@@ -178,6 +168,72 @@ console.log(
   '\n（客户端里没有地址设置项，发布仓库是打包时写死的，无需任何一方填写。）' +
   '\n下载页：https://github.com/' + repo + '/releases/tag/' + tag
 )
+
+/**
+ * 附件上传地址。优先用 Release 响应里的 upload_url 模板，而不是自己拼 ——
+ * 那个模板是 GitHub 当次给出的规范地址，仓库改名或后端调整时它会跟着变。
+ */
+function uploadUrl(name) {
+  const tpl = rel.body && rel.body.upload_url
+  const base = tpl
+    ? tpl.replace(/\{\?[^}]*\}$/, '')
+    : 'https://uploads.github.com/repos/' + repo + '/releases/' + relId + '/assets'
+  return base + '?name=' + encodeURIComponent(name)
+}
+
+/**
+ * 上传一个附件，自己处理重定向与重试。
+ *
+ * 为什么不能依赖 fetch 内置的跟随重定向：请求体是一个**流**，
+ * 而流只能被消费一次。GitHub 偶发返回 307 要求换地址重发时，
+ * 内置跟随拿不到可重放的 body，结果就是把 307 原样抛给调用方
+ * （实测发 1.21.2 时首个文件即撞上）。所以这里手动重发：每次都新开一个流。
+ *
+ * 顺带做有限重试：百兆文件在国内到 GitHub 的链路上断一次很常见，
+ * 而重试的代价远低于让整次发布失败后人工重跑。
+ */
+async function uploadAsset(url, f, attempt = 1) {
+  const MAX = 4
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'content-type': 'application/octet-stream',
+        'content-length': String(f.size)
+      },
+      // 流式上传：安装包接近百兆，整体读进内存没必要
+      body: createReadStream(f.path),
+      duplex: 'half',
+      // 关掉自动跟随：流不可重放，跟随只会失败得更含糊
+      redirect: 'manual'
+    })
+  } catch (err) {
+    if (attempt >= MAX) throw err
+    console.log('  … ' + f.name + ' 上传中断（' + err.message + '），重试 ' + attempt + '/' + (MAX - 1))
+    await sleep(2000 * attempt)
+    return uploadAsset(url, f, attempt + 1)
+  }
+  if ([301, 302, 307, 308].includes(res.status)) {
+    const next = res.headers.get('location')
+    if (next && attempt < MAX) {
+      console.log('  … ' + f.name + ' 被重定向，换地址重发')
+      return uploadAsset(next, f, attempt + 1)
+    }
+  }
+  // 5xx 是服务端侧的暂时故障，值得重试；4xx 是我们自己的问题，重试没有意义
+  if (res.status >= 500 && attempt < MAX) {
+    console.log('  … ' + f.name + ' 服务端返回 ' + res.status + '，重试 ' + attempt + '/' + (MAX - 1))
+    await sleep(2000 * attempt)
+    return uploadAsset(url, f, attempt + 1)
+  }
+  return res
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
 
 function fmt(n) {
   const u = ['B', 'KB', 'MB', 'GB']

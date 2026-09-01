@@ -204,18 +204,54 @@ function getUpdater(): AutoUpdater {
 }
 
 /**
+ * 把 HTML 片段压成可读的纯文本。
+ *
+ * 为什么需要这一步：GitHub 的 Release 正文经 API 返回时已被渲染成 HTML，
+ * 而更新面板刻意按纯文本渲染（那段文字来自服务端，不该有能力往界面里插标签）。
+ * 两者相遇的结果是用户看到一堆 <h3>、<code>、<blockquote> 字面量。
+ *
+ * 所以不是「要不要转义」的问题 —— 转义已经做了，缺的是把标签**语义**还原成排版：
+ * 块级标签变换行、列表项变短横线、实体还原成字符。
+ */
+function htmlToText(html: string): string {
+  return (
+    html
+      // 块级元素的边界就是换行；<br> 与 </p> 尤其不能丢，否则整段挤成一行
+      .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+      .replace(/<\s*\/\s*(p|div|h[1-6]|blockquote|pre|tr)\s*>/gi, '\n')
+      // 列表项前面补一个短横线，否则多条并成一段读不出是列表
+      .replace(/<\s*li\s*[^>]*>/gi, '- ')
+      .replace(/<\s*\/\s*li\s*>/gi, '\n')
+      // 其余标签直接去掉，只留文字
+      .replace(/<[^>]+>/g, '')
+      // 常见实体还原（&amp; 必须放最后，否则会把 &amp;lt; 二次解成 <）
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&amp;/gi, '&')
+      // 塌陷多余空行：HTML 里的缩进换行会残留成一堆空行
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  )
+}
+
+/**
  * 发布说明可能是字符串，也可能是 { version, note } 数组（多版本累积）。
- * 统一成一段文本，界面就不必分类型处理。
+ * 统一成一段纯文本，界面就不必分类型处理，也不必自己解 HTML。
  */
 function normalizeNotes(notes: unknown): string | undefined {
-  if (typeof notes === 'string') return notes
+  if (typeof notes === 'string') return htmlToText(notes) || undefined
   if (Array.isArray(notes)) {
     return notes
       .map((n) => {
         const o = n as { version?: string; note?: string | null }
-        return (o.version ? 'v' + o.version + '\n' : '') + (o.note ?? '')
+        return (o.version ? 'v' + o.version + '\n' : '') + htmlToText(o.note ?? '')
       })
       .join('\n\n')
+      .trim()
   }
   return undefined
 }
