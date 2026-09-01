@@ -1,0 +1,607 @@
+/* ==========================================================================
+   设计令牌（Design Tokens）
+   --------------------------------------------------------------------------
+   分三层：
+   1) 尺度层（type / space / radius / motion）—— 与主题无关，只定义节奏
+   2) 语义色层（bg / text / border / state）—— 按主题切换
+   3) 控件层（control-h / focus-ring / field-*）—— 由前两层组合而成
+   组件只消费第 3 层与语义色，不写死具体数值，换主题与调密度才不会漏改。
+   ========================================================================== */
+
+:root {
+  /* —— 字体 —— */
+  /* 中文字重在 Windows 上跳变明显，UI 文案统一用 Variable Text 优先的栈；
+     报文与数字用等宽 + tabular-nums，避免逐帧刷新时列宽抖动 */
+  --font-sans: "Inter", "SF Pro Text", -apple-system, "Segoe UI Variable Text",
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Mono", "Cascadia Code",
+    "Consolas", "Menlo", ui-monospace, monospace;
+  /* 兼容旧引用 */
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+
+  /* —— 字号阶梯（14px 为正文基准）——
+     原来以 13px 为基准，在 1080p 以上的高分屏 + 中文字形上偏小，
+     长时间读报文很累。整体上移一档，并把最小的 micro 从 10px 提到 11px：
+     10px 中文在非整数缩放下会糊成一团。 */
+  --fs-micro: 11px;   /* 角标、计数 */
+  --fs-xs: 12px;      /* 辅助说明、表头 */
+  --fs-sm: 13px;      /* 次要控件文字 */
+  --fs-md: 14px;      /* 正文与控件默认 */
+  --fs-lg: 16px;      /* 区块标题 */
+  --fs-xl: 20px;      /* 页面标题 */
+  --fs-2xl: 24px;     /* 空状态主标题 */
+
+  --lh-tight: 1.3;
+  --lh-normal: 1.55;
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* —— 间距（4px 网格）—— */
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 20px;
+  --sp-7: 24px;
+  --sp-8: 32px;
+
+  /* —— 圆角 —— */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-pill: 999px;
+  --radius: var(--r-md); /* 兼容旧引用 */
+
+  /* —— 控件尺寸（三档密度由 data-density 覆盖）—— */
+  --control-h-sm: 26px;
+  --control-h: 32px;
+  --control-h-lg: 38px;
+  --control-px: 11px;
+
+  /* —— 动效 —— */
+  --ease: cubic-bezier(0.2, 0, 0.13, 1);
+  --dur-fast: 90ms;
+  --dur: 150ms;
+
+  /* —— 层级 —— */
+  --z-panel: 40;
+  --z-overlay: 60;
+  --z-menu: 80;
+
+  --warn: #c9a227;
+  --error: #d0574f;
+}
+
+/* 紧凑 / 宽松密度：只改控件高度与内距，布局代码零改动 */
+:root[data-density='compact'] {
+  --control-h-sm: 24px;
+  --control-h: 28px;
+  --control-h-lg: 34px;
+  --control-px: 9px;
+  --fs-md: 13px;
+  --fs-sm: 12px;
+}
+:root[data-density='comfortable'] {
+  --control-h-sm: 30px;
+  --control-h: 36px;
+  --control-h-lg: 42px;
+  --control-px: 13px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+}
+
+/* ==========================================================================
+   深色（默认）—— 整体透明，左右栏半透明玻璃，中栏深色实底
+   ========================================================================== */
+:root,
+:root[data-theme='dark'] {
+  --app-bg: transparent;
+  --sidebar-bg: rgba(23, 25, 30, 0.62);
+  --sidebar-blur: 26px;
+
+  --bg-0: #1a1c20;
+  --bg-1: #202329;
+  --bg-2: #262a31;
+  --bg-3: #2f333c;
+  --bg-inset: rgba(0, 0, 0, 0.22);
+
+  --border: #33373f;
+  --border-strong: #454a55;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  --text-0: #ececf0;
+  --text-1: #a6abb4;
+  --text-2: #71767f;
+  --text-3: #575c65;
+
+  --accent: #ececf0;
+  --tx: #cfd3da;
+  --rx: #9aa0aa;
+
+  /* 主按钮：浅底深字 */
+  --btn-bg: #ececf0;
+  --btn-fg: #17191d;
+  --btn-hover: #ffffff;
+  --btn-active: #d8dade;
+
+  /* 次级按钮：极淡叠加，无描边跳变 */
+  --btn2-bg: rgba(255, 255, 255, 0.06);
+  --btn2-bg-hover: rgba(255, 255, 255, 0.1);
+  --btn2-bg-active: rgba(255, 255, 255, 0.14);
+  --btn2-fg: var(--text-0);
+
+  /* 输入类控件 */
+  --field-bg: rgba(255, 255, 255, 0.04);
+  --field-bg-hover: rgba(255, 255, 255, 0.06);
+  --field-bg-focus: rgba(255, 255, 255, 0.07);
+  --field-border: rgba(255, 255, 255, 0.09);
+  --field-border-hover: rgba(255, 255, 255, 0.16);
+  --field-fg: var(--text-0);
+  --field-placeholder: var(--text-3);
+
+  --focus-ring: rgba(255, 255, 255, 0.34);
+  --focus-ring-w: 2px;
+
+  /* 柔和主操作：左栏「新建连接」这类常驻入口。
+     用浮起的实底卡片而不是高对比色块——它一直在视野里，做成最亮的元素会
+     持续抢走注意力，而 ChatGPT / Codex 的侧栏入口也是这种弱化处理 */
+  --btnq-bg: rgba(255, 255, 255, 0.1);
+  --btnq-bg-hover: rgba(255, 255, 255, 0.15);
+  --btnq-bg-active: rgba(255, 255, 255, 0.2);
+  --btnq-border: rgba(255, 255, 255, 0.12);
+
+  --selected-bg: rgba(255, 255, 255, 0.07);
+  /* 强选中态：用于「一组互斥选项里当前选了哪个」这类需要一眼看清的场景
+     （新建连接的类型卡片、分段控件）。0.07 的常规选中在深底上几乎看不出来 */
+  --selected-strong-bg: rgba(255, 255, 255, 0.155);
+  --selected-strong-border: rgba(255, 255, 255, 0.26);
+  --hover-bg: rgba(255, 255, 255, 0.045);
+  --active-bg: rgba(255, 255, 255, 0.1);
+
+  --hl-bg: rgba(201, 168, 106, 0.28);
+  --hl-fg: #f3e6c8;
+
+  --overlay: rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.55);
+  --titlebar-bg: rgba(20, 22, 26, 0.55);
+  --menu-bg: rgba(32, 35, 41, 0.94);
+  --scrollbar: rgba(255, 255, 255, 0.14);
+  --scrollbar-hover: rgba(255, 255, 255, 0.24);
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   浅色
+   ========================================================================== */
+:root[data-theme='light'] {
+  --app-bg: transparent;
+  --sidebar-bg: rgba(249, 250, 251, 0.72);
+  --sidebar-blur: 26px;
+
+  --bg-0: #ffffff;
+  --bg-1: #f7f8fa;
+  --bg-2: #f1f2f5;
+  --bg-3: #e6e8ec;
+  --bg-inset: rgba(0, 0, 0, 0.035);
+
+  --border: #e3e5ea;
+  --border-strong: #cfd3da;
+  --border-subtle: rgba(0, 0, 0, 0.06);
+
+  --text-0: #1f2329;
+  --text-1: #5b616b;
+  --text-2: #8b909a;
+  --text-3: #a8adb6;
+
+  --accent: #1f2329;
+  --tx: #3a3f4a;
+  --rx: #6b717b;
+
+  --btn-bg: #1f2329;
+  --btn-fg: #ffffff;
+  --btn-hover: #33373f;
+  --btn-active: #14171b;
+
+  --btn2-bg: rgba(0, 0, 0, 0.045);
+  --btn2-bg-hover: rgba(0, 0, 0, 0.075);
+  --btn2-bg-active: rgba(0, 0, 0, 0.1);
+  --btn2-fg: var(--text-0);
+
+  --field-bg: #ffffff;
+  --field-bg-hover: #ffffff;
+  --field-bg-focus: #ffffff;
+  --field-border: #dcdfe5;
+  --field-border-hover: #c3c8d0;
+  --field-fg: var(--text-0);
+  --field-placeholder: var(--text-3);
+
+  --focus-ring: rgba(31, 35, 41, 0.28);
+  --focus-ring-w: 2px;
+
+  /* 浅色下柔和主操作走白底 + 描边 + 投影：浅灰半透明侧栏上，
+     纯白卡片比深色块更协调，也不会和右侧白色内容区糊在一起 */
+  --btnq-bg: #ffffff;
+  --btnq-bg-hover: #ffffff;
+  --btnq-bg-active: #f1f2f5;
+  --btnq-border: #d9dce2;
+
+  --selected-bg: rgba(0, 0, 0, 0.05);
+  --selected-strong-bg: rgba(31, 35, 41, 0.1);
+  --selected-strong-border: rgba(31, 35, 41, 0.24);
+  --hover-bg: rgba(0, 0, 0, 0.032);
+  --active-bg: rgba(0, 0, 0, 0.07);
+
+  --hl-bg: rgba(214, 168, 46, 0.32);
+  --hl-fg: #4a3a08;
+
+  --overlay: rgba(0, 0, 0, 0.32);
+  --shadow-sm: 0 1px 2px rgba(16, 20, 28, 0.06);
+  --shadow-md: 0 8px 24px rgba(16, 20, 28, 0.1);
+  --shadow-lg: 0 20px 56px rgba(16, 20, 28, 0.16);
+  --titlebar-bg: rgba(252, 252, 253, 0.62);
+  --menu-bg: rgba(255, 255, 255, 0.96);
+  --scrollbar: rgba(0, 0, 0, 0.16);
+  --scrollbar-hover: rgba(0, 0, 0, 0.26);
+
+  color-scheme: light;
+}
+
+/* 连接生命周期日志着色：中性、低饱和，不与灰阶打架 */
+:root,
+:root[data-theme='dark'] {
+  --conn-ok: #7fa88b;
+  --conn-warn: #c9a86a;
+  --conn-error: #d0574f;
+}
+:root[data-theme='light'] {
+  --conn-ok: #4f7d5e;
+  --conn-warn: #9a7a34;
+  --conn-error: #b8453c;
+}
+
+/* ==========================================================================
+   基础重置
+   ========================================================================== */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  font-weight: var(--fw-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-synthesis-weight: none;
+  overflow: hidden;
+}
+
+/* 数字统一等宽对齐：统计值与报文列宽在刷新时不再抖动 */
+code,
+kbd,
+samp,
+pre,
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   控件基础层
+   --------------------------------------------------------------------------
+   这里只管「内联样式管不到的部分」：字体继承、focus 可见性、placeholder、
+   disabled、过渡、原生外观剥离。用 :where() 把特异性压到 0，
+   任何组件级 class 或内联样式都能覆盖它。
+   ========================================================================== */
+:where(button, input, select, textarea, optgroup) {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: var(--lh-tight);
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+:where(button) {
+  cursor: pointer;
+  border: none;
+  background: none;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+:where(input, textarea, select) {
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--field-placeholder);
+  opacity: 1;
+}
+
+:where(button, input, select, textarea):disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/*
+ * 悬停 / 按下反馈：不改 background，而是就地重定义控件令牌。
+ *
+ * 为什么这么写：项目里按钮外观走的是内联样式 `background: var(--btn-bg)`，
+ * 而内联样式的优先级高于任何 class 规则，常规的 `.btn:hover { background: ... }`
+ * 根本盖不住。但内联的 `var()` 是在元素自身上解析的——只要在 :hover 时把
+ * `--btn-bg` 在该元素上改掉，内联样式的取值就跟着变。这样 18 处按钮不用逐个
+ * 加 class 就都拿到了反馈，也不需要 !important。
+ *
+ * 之前 `--btn-hover` / `--btn2-bg-hover` 这几个令牌定义完就没人引用，
+ * 所有按钮实际上是「点下去没反应」的状态，这里一并接上。
+ */
+:where(button):not(:disabled):hover {
+  --btn-bg: var(--btn-hover);
+  --btn2-bg: var(--btn2-bg-hover);
+  --btnq-bg: var(--btnq-bg-hover);
+}
+:where(button):not(:disabled):active {
+  --btn-bg: var(--btn-active);
+  --btn2-bg: var(--btn2-bg-active);
+  --btnq-bg: var(--btnq-bg-active);
+}
+
+/* 输入框悬停：底色与描边同时提一档，光标未落入时也能看出这里可编辑 */
+:where(input:not([type='checkbox']):not([type='radio']), textarea):not(:disabled):hover {
+  --field-bg: var(--field-bg-hover);
+  --field-border: var(--field-border-hover);
+}
+
+/* 焦点环：只在键盘导航时出现，鼠标点击不闪。
+   用 box-shadow 而非 outline，圆角能贴合控件本身 */
+:where(button, input, select, textarea, [tabindex]):focus {
+  outline: none;
+}
+:where(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--focus-ring-w) var(--focus-ring);
+}
+/* 文本输入即使是鼠标点入也给焦点提示，否则不知道键盘落在哪 */
+:where(input:not([type='checkbox']):not([type='radio']), textarea):focus {
+  border-color: var(--field-border-hover);
+  box-shadow: 0 0 0 var(--focus-ring-w) var(--focus-ring);
+}
+
+/* 下拉框：剥掉系统箭头，换成主题色 caret，深浅主题下不再出现白底白箭头 */
+:where(select) {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    right 12px center,
+    right 7px center;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 26px;
+  cursor: pointer;
+}
+/* 展开后的选项列表跟随主题（Windows 下 option 会用系统色，必须显式指定） */
+:where(select) option {
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+:where(textarea) {
+  resize: vertical;
+  line-height: var(--lh-normal);
+}
+
+/* 勾选框与单选：用 accent-color 让原生控件直接跟随主题，
+   比自绘一套更稳（键盘可达性、indeterminate 态都免费拿到） */
+:where(input[type='checkbox'], input[type='radio']) {
+  accent-color: var(--text-0);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* 数字输入：去掉上下微调箭头，调试场景里误触会改值 */
+:where(input[type='number']) {
+  -moz-appearance: textfield;
+  font-variant-numeric: tabular-nums;
+}
+:where(input[type='number'])::-webkit-outer-spin-button,
+:where(input[type='number'])::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+:where(input[type='range']) {
+  accent-color: var(--text-1);
+}
+
+/* 选区颜色跟随主题 */
+::selection {
+  background: var(--selected-bg);
+  color: var(--text-0);
+}
+
+/* 搜索命中高亮 */
+mark {
+  background: var(--hl-bg);
+  color: var(--hl-fg);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ==========================================================================
+   滚动条
+   ========================================================================== */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: var(--r-sm);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 窗口拖拽区：自绘标题栏必需。交互元素要显式还原为 no-drag */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* 尊重系统「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==========================================================================
+   自绘标题栏 / 菜单栏
+   --------------------------------------------------------------------------
+   hover 态必须写在 CSS 里：内联样式（本项目主要的样式方式）无法表达伪类。
+   ========================================================================== */
+.menu-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-0);
+}
+
+.win-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-0);
+}
+.win-btn:active {
+  background: var(--active-bg);
+}
+/* 关闭按钮沿用 Windows 习惯：hover 变红底白字，误触代价高的操作要显眼 */
+.win-btn-close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+.win-btn-close:active {
+  background: #a8271a;
+  color: #ffffff;
+}
+
+/* 通用 hover：给用 data-hover 标记的内联样式元素兜底 */
+[data-hoverable]:hover {
+  background: var(--hover-bg);
+}
+
+/* ==========================================================================
+   自绘下拉框（components/ui/Select.tsx）
+   -------------------------------------------------------------------------- */
+.ui-select-trigger:hover:not(:disabled) {
+  background: var(--field-bg-hover);
+  border-color: var(--field-border-hover);
+}
+.ui-select-trigger[aria-expanded='true'] {
+  background: var(--field-bg-focus);
+  border-color: var(--field-border-hover);
+}
+
+/* 列表入场：从触发器方向轻微下沉，比直接闪现更容易看清是哪个框展开的 */
+.ui-select-list {
+  animation: ui-pop var(--dur-fast) var(--ease);
+  transform-origin: top center;
+}
+@keyframes ui-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ==========================================================================
+   可拉伸文本域
+   --------------------------------------------------------------------------
+   textarea 默认 resize 手柄在深色主题下几乎看不见，用户不知道能拉大。
+   给一个显式的对角线提示。
+   ========================================================================== */
+textarea {
+  background-image: linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    var(--text-3) 4px 5px,
+    transparent 5px 7px,
+    var(--text-3) 7px 8px,
+    transparent 8px
+  );
+  background-position: right 2px bottom 2px;
+  background-size: 10px 10px;
+  background-repeat: no-repeat;
+}
+textarea[data-no-resize-hint] {
+  background-image: none;
+}
+
+/* ==========================================================================
+   报文行的书签星标
+   --------------------------------------------------------------------------
+   星标常显会在每行开头加一列噪点，而报文本身是要逐字扫读的；常隐则没人知道
+   有这个功能。折中：未标记的星只在行 hover 时出现，已标记的常显（它是状态，
+   不是入口）。用 CSS 做而不是 React 的 onMouseEnter —— 后者会让虚拟列表里
+   每次移动鼠标都触发一次 setState 重渲染。
+   ========================================================================== */
+.frame-mark {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.frame-line:hover .frame-mark {
+  opacity: 1;
+}
+.frame-mark[data-on='1'] {
+  opacity: 1;
+}
+.frame-mark:hover {
+  color: var(--warn) !important;
+}

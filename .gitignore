@@ -1,0 +1,25 @@
+# 依赖与构建产物
+node_modules
+out
+dist
+
+# 打包产物。安装包不进代码仓库：几十兆的二进制会让仓库迅速膨胀且无法增量存储，
+# 它们的归宿是公开发布仓库的 Release 附件（npm run publish:github）。
+release
+
+# TypeScript 增量编译缓存（因机器而异，进仓库只会制造冲突）
+*.tsbuildinfo
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
+
+# 本地环境变量。发布用的 GitHub 令牌放在这里，绝不能进仓库
+.env
+.env.local
+
+# 临时调试脚本与截图（以点开头的一次性文件）
+.t*.mjs
+.t*.txt
+.s*.png

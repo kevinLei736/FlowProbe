@@ -1,0 +1,92 @@
+appId: com.flowprobe.app
+productName: FlowProbe
+copyright: Copyright © 2026
+directories:
+  output: release
+  buildResources: build
+# 产物文件名固定为纯 ASCII 且不含空格。
+#
+# 默认产物名会带上 productName 与空格（"FlowProbe Setup 1.21.0.exe"）。
+# 分发环节对文件名会做改写：上传到 GitHub Releases 时空格与非 ASCII 字符被替换，
+# 而 latest.yml 里记的是原始文件名 —— 名字一旦被改写，客户端就按记录的名字去下载，
+# 结果必然 404。写死成连字符形式后两边始终一致，自建服务器分发也不会碰到路径转义问题。
+artifactName: FlowProbe-Setup-${version}.${ext}
+# 更新源。
+#
+# 这里是**唯一**的更新地址来源。electron-builder 会把它写进安装包内的 app-update.yml，
+# electron-updater 启动时自己读，因此应用界面里没有任何地址输入框。
+#
+# 为什么不做成运行时可配：那等于把一件发布方只需决定一次的事，摊给每个使用者去填 ——
+# 而地址、仓库名、下载代理任何一处填错，表现都是同一个 404，用户无从判断错在哪。
+#
+# 为什么发布仓库（FlowProbeClient）与代码仓库（FlowProbe）是两个：
+# 自动更新要能匿名下载附件，所以放安装包的仓库必须公开；而源码要保持私有。
+# 把令牌打进客户端来读私有仓库等于公开这个令牌，不是可选项。
+#
+# 为什么用 github provider 而不是 generic + releases/latest/download/：
+# 前者直接读 Release 的元数据，因此 Release 正文能显示在应用的更新面板里，
+# 且 blockmap 增量下载不必穿过一层 302 跳转（跳转在部分网络下会让增量失效）。
+publish:
+  - provider: github
+    owner: LeiQinLin
+    repo: FlowProbeClient
+    # 只认正式 Release，不把预发布推给所有人
+    releaseType: release
+    # 只生成清单，不真的上传（打包命令用 --publish never，上传由 scripts/publish-github.mjs 做）
+    publishAutoUpdate: true
+files:
+  - out/**/*
+  - package.json
+  - build/icon.png
+afterSign: ./scripts/adhoc-sign.cjs
+asarUnpack:
+  - "**/node_modules/@serialport/**"
+  - "**/node_modules/serialport/**"
+  - "**/node_modules/bindings/**"
+  - "**/node_modules/node-gyp-build/**"
+  - "**/node_modules/better-sqlite3/**"
+mac:
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  darkModeSupport: true
+  # 无 Apple 开发者证书时走 ad-hoc 签名（identity: null + 下方 afterSign 钩子补 codesign -s -）。
+  # Apple Silicon 内核会直接杀掉签名无效的进程，所以 arm64 上「不签名」不是可选项。
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+dmg:
+  artifactName: FlowProbe-${version}-${arch}.${ext}
+  title: ${productName} ${version}
+  # 安装窗口里左边放 App、右边放「应用程序」快捷方式，是 mac 用户的肌肉记忆
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: FlowProbe

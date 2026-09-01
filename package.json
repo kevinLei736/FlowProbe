@@ -1,0 +1,46 @@
+{
+  "name": "flowprobe",
+  "version": "1.21.0",
+  "description": "多协议网络与串口调试台 (TCP / UDP / WebSocket / Serial / MQTT / Modbus / HTTP Mock / API 测试)",
+  "main": "./out/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "rebuild": "electron-builder install-app-deps",
+    "docs:guide": "node scripts/gen-user-guide.mjs",
+    "setup:mac": "bash scripts/setup-mac.sh",
+    "publish:github": "node scripts/publish-github.mjs",
+    "release": "npm run dist && npm run publish:github",
+    "dist": "electron-vite build && electron-builder --config electron-builder.yml --publish never",
+    "dist:win": "electron-vite build && electron-builder --config electron-builder.yml --win --publish never",
+    "dist:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac --publish never",
+    "dist:mac:arm": "electron-vite build && electron-builder --config electron-builder.yml --mac --arm64 --publish never",
+    "dist:mac:x64": "electron-vite build && electron-builder --config electron-builder.yml --mac --x64 --publish never"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.3.0",
+    "electron-updater": "^6.3.9",
+    "mqtt": "^5.10.1",
+    "serialport": "^12.0.0",
+    "ws": "^8.18.0",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.12",
+    "@vitejs/plugin-react": "^4.3.2",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.8"
+  }
+}
