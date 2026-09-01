@@ -1,6 +1,6 @@
 {
   "name": "flowprobe",
-  "version": "1.21.3",
+  "version": "1.21.4",
   "description": "多协议网络与串口调试台 (TCP / UDP / WebSocket / Serial / MQTT / Modbus / HTTP Mock / API 测试)",
   "main": "./out/main/index.js",
   "author": "",

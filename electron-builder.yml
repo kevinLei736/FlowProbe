@@ -6,7 +6,7 @@ directories:
   buildResources: build
 # 产物文件名固定为纯 ASCII 且不含空格。
 #
-# 默认产物名会带上 productName 与空格（"FlowProbe Setup 1.21.3.exe"）。
+# 默认产物名会带上 productName 与空格（"FlowProbe Setup 1.21.4.exe"）。
 # 分发环节对文件名会做改写：上传到 GitHub Releases 时空格与非 ASCII 字符被替换，
 # 而 latest.yml 里记的是原始文件名 —— 名字一旦被改写，客户端就按记录的名字去下载，
 # 结果必然 404。写死成连字符形式后两边始终一致，自建服务器分发也不会碰到路径转义问题。
@@ -28,7 +28,7 @@ artifactName: FlowProbe-Setup-${version}.${ext}
 # 且 blockmap 增量下载不必穿过一层 302 跳转（跳转在部分网络下会让增量失效）。
 publish:
   - provider: github
-    owner: LeiQinLin
+    owner: kevinLei736
     repo: FlowProbeClient
     # 只认正式 Release，不把预发布推给所有人
     releaseType: release

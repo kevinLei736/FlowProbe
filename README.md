@@ -10,7 +10,7 @@
 
 - 平台：Windows / macOS / Linux（当前打包目标为 Windows x64）
 - 技术栈：Electron 31 + React 18 + TypeScript + Zustand，electron-vite 构建，electron-builder 打包
-- 当前版本：**1.21.3**
+- 当前版本：**1.21.4**
 
 ---
 
@@ -891,7 +891,7 @@ FTS5 查询确实快到测不出来，但报文库是**写多读少**：每秒�
 
 这是给团队内部用的工具，改一个 Mock 规则、修一个分帧 bug，都不该演变成「群里发安装包 + 挨个提醒重装」。所以更新走应用内自查自装。
 
-**更新地址不可配置，界面里没有任何输入框。** 地址只有一处来源：打包时 `electron-builder.yml` 的 `publish` 段，electron-builder 会把它写进安装包内的 `app-update.yml`，客户端启动时自己读。当前指向公开仓库 `LeiQinLin/FlowProbeClient` 的 Release。
+**更新地址不可配置，界面里没有任何输入框。** 地址只有一处来源：打包时 `electron-builder.yml` 的 `publish` 段，electron-builder 会把它写进安装包内的 `app-update.yml`，客户端启动时自己读。当前指向公开仓库 `kevinLei736/FlowProbeClient` 的 Release。
 
 早先版本确实让用户在面板里选来源（自建目录 / GitHub 仓库）并填地址与下载代理，理由是「换服务器不用重新打包」。但那等于把一件发布方只需决定一次的事，摊给每一个使用者：他要判断填哪种来源、仓库名怎么写、代理选哪个 —— 而这三处任何一处写错，表现都是同一个 404，用户根本无从判断错在哪。收敛成单一口径后，装好即用。
 
@@ -911,8 +911,8 @@ FTS5 查询确实快到测不出来，但报文库是**写多读少**：每秒�
 
 | 仓库 | 可见性 | 放什么 |
 |------|--------|--------|
-| `LeiQinLin/FlowProbe` | **私有** | 源码、文档、构建脚本 |
-| `LeiQinLin/FlowProbeClient` | **公开** | 每个版本的安装包与版本清单（Release 附件）|
+| `kevinLei736/FlowProbe` | **私有** | 源码、文档、构建脚本 |
+| `kevinLei736/FlowProbeClient` | **公开** | 每个版本的安装包与版本清单（Release 附件）|
 
 **为什么必须拆开**：自动更新要能匿名下载附件。私有仓库的 Release 附件每次请求都要带令牌，而把令牌打进客户端就等于公开它 —— 任何人解包 asar 都能拿到，它还带着对源码仓库的读权限。所以「代码私有 + 安装包公开」是唯一站得住的组合；公开的那个仓库里只有二进制，不含一行源码。
 
@@ -920,7 +920,7 @@ FTS5 查询确实快到测不出来，但报文库是**写多读少**：每秒�
 # electron-builder.yml
 publish:
   - provider: github
-    owner: LeiQinLin
+    owner: kevinLei736
     repo: FlowProbeClient
     releaseType: release   # 只认正式 Release，草稿与预发布不会推给所有人
     publishAutoUpdate: true
@@ -937,7 +937,7 @@ publish:
 - **地址由打包决定，而不是运行时可配**。见上文：可配置把发布方的一次性决定变成了每个使用者的必答题，而答错的反馈信号（404）没有区分度。
 - **不调用 `setFeedURL`**。地址已经在安装包内的 `app-update.yml` 里，库自己读得到。再设一遍等于让同一个地址有两个来源，两处不一致时排查成本极高。
 - **错误按原因分类，而不是笼统报「更新失败」**。「发布仓库里还没有正式版本」「找不到版本清单」「网络连不上」对应完全不同的动作。1.20.0 及更早的包里写的是占位域名 `update.invalid`，客户端认得它并回「发布方尚未启用更新服务」，而不是抛一个域名解析错误 —— 后者是在向用户报告一件与他无关的事。
-- **产物名固定为纯 ASCII 且不含空格**（`FlowProbe-Setup-1.21.3.exe`）。默认产物名会带空格，而分发环节（GitHub Releases 上传等）会改写文件名，`latest.yml` 里记的却是原始名字，一旦被改写下载就必然 404。
+- **产物名固定为纯 ASCII 且不含空格**（`FlowProbe-Setup-1.21.4.exe`）。默认产物名会带空格，而分发环节（GitHub Releases 上传等）会改写文件名，`latest.yml` 里记的却是原始名字，一旦被改写下载就必然 404。
 - **状态用一个扁平的 phase 字段，而不是一堆布尔量**。「正在查 / 有新版 / 正在下 / 下好了 / 已是最新 / 出错了」本质是互斥的六种状态，用布尔量组合迟早出现「既在下载又已是最新」的矛盾组合，界面就得写一堆优先级判断。
 - **`electron-updater` 惰性引入，不放在文件顶部**。源码运行时它的构造过程本身就可能抛错，顶层 import 会连累主进程起不来 —— 为了一个可选功能拖垮整个应用不值得。
 - **失败原因翻成中文处置建议**，而不是把 `net::ERR_NAME_NOT_RESOLVED`、`sha512 mismatch` 原样丢出来。这里要留意更新请求走的是 Electron 的 `net` 模块，报的是 Chromium 错误码而不是 Node 的 `ENOTFOUND`，两套都得认。地址不可配之后，这些提示一律不再让用户「检查地址」—— 他没有地址可改，能做的只有查网络或者等发布方修好服务器。
@@ -1006,18 +1006,18 @@ npm run dist
 
 | 文件 | 说明 |
 |------|------|
-| `FlowProbe-Setup-1.21.3.exe` | NSIS 安装程序（约 86MB），可选安装目录、创建桌面与开始菜单快捷方式 |
-| `FlowProbe-Setup-1.21.3.exe.blockmap` | 增量更新用的块映射文件 |
+| `FlowProbe-Setup-1.21.4.exe` | NSIS 安装程序（约 86MB），可选安装目录、创建桌面与开始菜单快捷方式 |
+| `FlowProbe-Setup-1.21.4.exe.blockmap` | 增量更新用的块映射文件 |
 | `latest.yml` | 自动更新用的版本清单。发布时必须与安装包一起上传，缺它客户端查不到新版本 |
 
 在 macOS 上执行 `npm run dist:mac` 时，`release/` 下还会出现：
 
 | 文件 | 说明 |
 | --- | --- |
-| `FlowProbe-1.21.3-arm64.dmg` | Apple Silicon 安装镜像，双击拖入「应用程序」 |
-| `FlowProbe-1.21.3-x64.dmg` | Intel 安装镜像 |
-| `FlowProbe-1.21.3-arm64-mac.zip` | Apple Silicon 免安装压缩包（macOS 自动更新用的也是 zip）|
-| `FlowProbe-1.21.3-x64-mac.zip` | Intel 免安装压缩包 |
+| `FlowProbe-1.21.4-arm64.dmg` | Apple Silicon 安装镜像，双击拖入「应用程序」 |
+| `FlowProbe-1.21.4-x64.dmg` | Intel 安装镜像 |
+| `FlowProbe-1.21.4-arm64-mac.zip` | Apple Silicon 免安装压缩包（macOS 自动更新用的也是 zip）|
+| `FlowProbe-1.21.4-x64-mac.zip` | Intel 免安装压缩包 |
 | `win-unpacked/` | 免安装绿色版，直接运行其中的 `FlowProbe.exe` |
 
 ### 打包配置说明
@@ -1072,7 +1072,7 @@ icns 就是「8 字节魔数 + 若干 `类型 + 长度 + PNG` 块」的容器格
 
 ### 改名与数据兼容
 
-1.19.0 把应用标识从 `debug-toolbox` 改成 `flowprobe`（数据目录随之变化），1.21.3 进一步把显示名统一为英文 `FlowProbe`。前者牵动三处对老用户可见的东西，各自的处置如下。
+1.19.0 把应用标识从 `debug-toolbox` 改成 `flowprobe`（数据目录随之变化），1.21.4 进一步把显示名统一为英文 `FlowProbe`。前者牵动三处对老用户可见的东西，各自的处置如下。
 
 | 受影响的东西 | 为什么会受影响 | 处置 |
 | --- | --- | --- |
