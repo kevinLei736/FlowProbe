@@ -985,6 +985,7 @@ npm start            # 预览构建产物
 npm run typecheck    # 类型检查（主进程 + 渲染进程）
 npm run docs:guide   # 由应用内使用文档重新生成 docs/使用文档.md
 npm run publish:github  # 把 release/ 里的产物上传到 GitHub 发布仓库
+npm run publish:readme  # 把 client-readme/ 的中英双语说明发布到客户端仓库
 npm run release      # = dist + publish:github，一条命令发一版
 ```
 
@@ -1225,6 +1226,9 @@ linux:
 │  ├─ icon.svg / png / ico     Windows 与界面用图标
 │  ├─ icon.icns               macOS 应用图标
 │  └─ entitlements.mac.plist  macOS 权限声明（JIT / 网络监听 / 串口）
+├─ client-readme/             发布仓库（FlowProbeClient）的门面说明，中英双语
+│  ├─ README.md               中文版，GitHub 默认渲染，主入口
+│  └─ README.en.md            英文版，顶部注明应用界面为简体中文
 ├─ docs/
 │  ├─ 需求与架构设计.md         需求与架构设计文档
 │  ├─ 使用文档.md               面向使用者的中文手册（由 npm run docs:guide 从应用内文档生成）

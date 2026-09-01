@@ -14,6 +14,7 @@
     "docs:guide": "node scripts/gen-user-guide.mjs",
     "setup:mac": "bash scripts/setup-mac.sh",
     "publish:github": "node scripts/publish-github.mjs",
+    "publish:readme": "node scripts/publish-client-readme.mjs",
     "release": "npm run dist && npm run publish:github",
     "dist": "electron-vite build && electron-builder --config electron-builder.yml --publish never",
     "dist:win": "electron-vite build && electron-builder --config electron-builder.yml --win --publish never",
