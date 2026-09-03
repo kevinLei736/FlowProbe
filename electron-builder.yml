@@ -49,6 +49,7 @@ mac:
   icon: build/icon.icns
   category: public.app-category.developer-tools
   darkModeSupport: true
+  artifactName: FlowProbe-${version}-${arch}-mac.${ext}
   # 无 Apple 开发者证书时走 ad-hoc 签名（identity: null + 下方 afterSign 钩子补 codesign -s -）。
   # Apple Silicon 内核会直接杀掉签名无效的进程，所以 arm64 上「不签名」不是可选项。
   identity: null

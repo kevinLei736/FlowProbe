@@ -60,7 +60,7 @@ exports.default = async function afterSign(context) {
   const hasEnt = existsSync(entPath)
 
   const sign = (target, withEntitlements) => {
-    const args = ['--force', '--sign', '-', '--timestamp=none']
+    const args = ['--deep', '--force', '--sign', '-', '--timestamp=none']
     if (withEntitlements && hasEnt) args.push('--entitlements', entPath)
     args.push(target)
     execFileSync('codesign', args, { stdio: 'pipe' })
@@ -68,12 +68,8 @@ exports.default = async function afterSign(context) {
 
   let ok = 0
   for (const target of inner) {
-    try {
-      sign(target, false)
-      ok++
-    } catch (err) {
-      console.warn('[adhoc-sign] 内层签名失败（继续）: ' + target)
-    }
+    sign(target, false)
+    ok++
   }
   // 最后签本体。内层内容变过之后外层签名必然失效，所以顺序不能反。
   sign(appPath, true)
