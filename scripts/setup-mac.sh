@@ -14,6 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 echo "==> 工作目录: $(pwd)"
 
+if [ "$(id -u)" -eq 0 ]; then
+  echo "!! 不要使用 sudo 运行 setup:mac。"
+  echo "   npm/node 生成的依赖和 release 产物必须归当前用户所有，否则 electron-builder 无法清理旧文件。"
+  exit 1
+fi
+
 # 国内网络下载 Electron 二进制很慢，这里默认走镜像。
 # 已自行配置代理的用户可以先 export ELECTRON_MIRROR= 覆盖为空。
 export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"

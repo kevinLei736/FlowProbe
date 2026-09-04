@@ -18,9 +18,9 @@
     "release": "npm run dist && npm run publish:github",
     "dist": "electron-vite build && electron-builder --config electron-builder.yml --publish never",
     "dist:win": "electron-vite build && electron-builder --config electron-builder.yml --win --publish never",
-    "dist:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac --publish never",
-    "dist:mac:arm": "electron-vite build && electron-builder --config electron-builder.yml --mac --arm64 --publish never",
-    "dist:mac:x64": "electron-vite build && electron-builder --config electron-builder.yml --mac --x64 --publish never"
+    "dist:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac --publish never && node scripts/gen-mac-update.mjs",
+    "dist:mac:arm": "electron-vite build && electron-builder --config electron-builder.yml --mac --arm64 --publish never && node scripts/gen-mac-update.mjs",
+    "dist:mac:x64": "electron-vite build && electron-builder --config electron-builder.yml --mac --x64 --publish never && node scripts/gen-mac-update.mjs"
   },
   "dependencies": {
     "better-sqlite3": "11.3.0",
