@@ -10,6 +10,7 @@ import type {
 import { BaseAdapter } from './base'
 import { encodeContent } from '../codec/framing'
 import { Backoff, formatWait, normalizeBackoff } from './reconnect'
+import { describeConnectError } from './net-error'
 
 /**
  * MQTT 客户端适配器。
@@ -28,6 +29,16 @@ export class MqttClientAdapter extends BaseAdapter {
   private everConnected = false
   /** 已成功订阅的过滤器，重连后据此恢复 */
   private subscribed = new Set<string>()
+  /**
+   * 当前链路是否正在建立。
+   *
+   * mqtt.js 的 connect() 是同步返回、异步连上的：在这段时间里 status 还是
+   * connecting，界面上「启动」按钮仍然可点。如果用户连点两下（或者自动重连
+   * 与手动启动撞在一起），就会同时存在两条同 clientId 的链路 —— Broker 按
+   * 协议会踢掉先到的那条，被踢的一方又触发重连，于是永远在「连上→被踢→
+   * 重连」之间循环。这个标志让重复的 start 变成空操作。
+   */
+  private starting = false
 
   constructor(id: string, config: SessionConfig) {
     super(id, config)
@@ -39,11 +50,23 @@ export class MqttClientAdapter extends BaseAdapter {
   }
 
   async start(): Promise<void> {
+    /*
+      已经有一条活着（连接中或已连接）的链路时，start 是空操作。
+      否则连点两次「启动」会先拆掉再重建，界面上就是一次明显的「断开→连接」跳动。
+    */
+    if (this.client && (this.starting || this.client.connected)) return
     this.manualStop = false
     this.everConnected = false
     this.subscribed.clear()
     this.backoff.update(normalizeBackoff(this.config))
     this.backoff.reset()
+    /*
+      幂等启动：先彻底拆掉可能残留的旧链路。
+      没有这一步时，第二次 start 会把 this.client 覆盖掉，旧 client 仍然连着
+      Broker，只是再也没有人能关掉它 —— 它的 close 事件仍绑在 this 上，
+      一旦被 Broker 踢下线就会替新链路再排一次重连，形成自我维持的循环。
+    */
+    this.teardownClient()
     this.connect()
   }
 
@@ -94,6 +117,7 @@ export class MqttClientAdapter extends BaseAdapter {
   }
 
   private connect(): void {
+    if (this.starting && this.client) return
     const cfg = this.mqttCfg
     const url = String(cfg.url ?? '').trim()
     if (!url) {
@@ -113,8 +137,17 @@ export class MqttClientAdapter extends BaseAdapter {
       return
     }
     this.client = client
+    this.starting = true
+    /*
+      下面每个回调都先确认「事件来自当前这条链路」。
+      拆链、重建、手动停止之后，旧 client 的 close / error 可能迟到几毫秒，
+      不校验就会让一条已经废弃的连接继续驱动重连状态机。
+    */
+    const current = (): boolean => this.client === client
 
     client.on('connect', (packet) => {
+      if (!current()) return
+      this.starting = false
       const retried = this.backoff.attempts
       this.backoff.reset()
       this.everConnected = true
@@ -131,6 +164,7 @@ export class MqttClientAdapter extends BaseAdapter {
     })
 
     client.on('message', (topic, payload, packet) => {
+      if (!current()) return
       const buf = Buffer.isBuffer(payload) ? payload : Buffer.from(payload)
       // 可打印文本按 utf8 展示，二进制载荷落 HEX，避免时间轴出现乱码方块
       const encoding = isMostlyText(buf) ? 'utf8' : 'hex'
@@ -143,9 +177,13 @@ export class MqttClientAdapter extends BaseAdapter {
       })
     })
 
-    client.on('error', (err: Error) => this.emitError(err.message))
+    client.on('error', (err: Error) => {
+      if (!current()) return
+      this.emitError(describeConnectError(err, url))
+    })
 
     client.on('disconnect', (packet) => {
+      if (!current()) return
       // MQTT 5：服务端主动下发 DISCONNECT，原因码是排障关键信息
       const code = packet?.reasonCode
       const reason = packet?.properties?.reasonString
@@ -157,6 +195,8 @@ export class MqttClientAdapter extends BaseAdapter {
     })
 
     client.on('close', () => {
+      if (!current()) return
+      this.starting = false
       this.subscribed.clear()
       if (this.manualStop) {
         this.emitStatus('closed', '连接已关闭')
@@ -171,6 +211,9 @@ export class MqttClientAdapter extends BaseAdapter {
 
   private scheduleReconnect(): void {
     if (this.config.autoReconnect === false || this.manualStop) return
+    // 已经排了一次就不要再排：close 与 error 偶尔会连着来，叠两个定时器
+    // 会让下一次重连变成两条并发链路，又绕回同 clientId 互踢
+    if (this.backoff.pending) return
     const planned = this.backoff.schedule(() => {
       this.teardownClient()
       this.connect()
@@ -283,6 +326,7 @@ export class MqttClientAdapter extends BaseAdapter {
   private teardownClient(): void {
     const client = this.client
     this.client = null
+    this.starting = false
     if (!client) return
     client.removeAllListeners()
     try {
@@ -294,6 +338,7 @@ export class MqttClientAdapter extends BaseAdapter {
 
   async stop(): Promise<void> {
     this.manualStop = true
+    this.starting = false
     this.backoff.cancel()
     this.subscribed.clear()
     const client = this.client
@@ -301,14 +346,33 @@ export class MqttClientAdapter extends BaseAdapter {
     if (client) {
       client.removeAllListeners()
       await new Promise<void>((resolve) => {
+        /*
+          优雅断开要等 DISCONNECT 发完、socket 关闭。对端网络异常时这个回调
+          可能一直不来，界面上的「停止 / 重新连接」就会卡住。加一个兜底：
+          1.5 秒还没关干净就直接强制结束，让上层能继续重建。
+        */
+        const timer = setTimeout(() => {
+          try {
+            client.end(true)
+          } catch {
+            // 忽略关闭异常
+          }
+          resolve()
+        }, 1500)
         try {
-          client.end(false, {}, () => resolve())
+          client.end(false, {}, () => {
+            clearTimeout(timer)
+            resolve()
+          })
         } catch {
+          clearTimeout(timer)
           resolve()
         }
       })
       this.emitStatus('closed', '连接已关闭')
       this.emitConn('连接已关闭（手动停止）', 'info')
+    } else {
+      this.emitStatus('closed', '连接已关闭')
     }
   }
 }

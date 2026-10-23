@@ -1179,6 +1179,8 @@ export interface AppInfo {
   userData: string
   workspacePath: string
   historyPath: string
+  /** 本机局域网 IPv4 地址，供服务端类工具提示「远程该用哪个地址访问」 */
+  lanIps: string[]
 }
 
 /**

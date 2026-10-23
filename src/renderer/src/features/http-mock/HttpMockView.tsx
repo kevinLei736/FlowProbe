@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import type { HttpLogEntry, HttpMockConfig, Session } from '@shared/protocol'
-import { useStore } from '../../store/useStore'
+import { flushPendingWrites, useStore } from '../../store/useStore'
 import { useLayout } from '../../store/useLayout'
 import { KIND_META, STATUS_META, keyHint } from '../../app/meta'
 import { HttpMockPanel } from './HttpMockPanel'
 import { RecorderPanel } from './RecorderPanel'
 import { CertPanel } from './CertPanel'
+import { ListenPanel } from './ListenPanel'
 import { mockLogsToHarJson } from './harExport'
 import { VirtualList } from '../../components/VirtualList'
 import { Select } from '../../components/ui/Select'
@@ -15,6 +16,7 @@ export function HttpMockView({ session }: { session: Session }): JSX.Element {
   const start = useStore((s) => s.start)
   const stop = useStore((s) => s.stop)
   const remove = useStore((s) => s.remove)
+  const renameSession = useStore((s) => s.renameSession)
   const clearHttpLogs = useStore((s) => s.clearHttpLogs)
   const updateHttpMock = useStore((s) => s.updateHttpMock)
   const inspectorVisible = useLayout((s) => s.inspectorVisible)
@@ -23,13 +25,25 @@ export function HttpMockView({ session }: { session: Session }): JSX.Element {
   const [panelOpen, setPanelOpen] = useState(false)
   const [recOpen, setRecOpen] = useState(false)
   const [certOpen, setCertOpen] = useState(false)
+  const [listenOpen, setListenOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
   const [selId, setSelId] = useState<string | null>(null)
+  // HTTP Mock 没有检查器面板，改名只能放在标题上：双击进入，回车/失焦保存
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(session.name)
+
+  const commitName = (): void => {
+    const next = nameDraft.trim()
+    if (next && next !== session.name) renameSession(session.id, next)
+    else setNameDraft(session.name)
+    setEditingName(false)
+  }
 
   const meta = KIND_META[session.kind]
   const status = STATUS_META[session.status]
-  const running = session.status === 'listening'
+  // connecting 也算占用：此时再点启动会抢同一个端口
+  const running = session.status === 'listening' || session.status === 'connecting'
   const scheme = session.config.https ? 'https' : 'http'
   const base = `${scheme}://127.0.0.1:${session.config.port ?? 3000}`
 
@@ -69,7 +83,33 @@ export function HttpMockView({ session }: { session: Session }): JSX.Element {
       <div style={styles.center}>
         <header style={styles.topbar}>
           <span style={{ ...styles.dot, background: status.color }} />
-          <span style={styles.title}>{session.name}</span>
+          {editingName ? (
+            <input
+              autoFocus
+              style={styles.titleInput}
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitName()
+                if (e.key === 'Escape') {
+                  setNameDraft(session.name)
+                  setEditingName(false)
+                }
+              }}
+            />
+          ) : (
+            <span
+              style={styles.title}
+              title="双击改名"
+              onDoubleClick={() => {
+                setNameDraft(session.name)
+                setEditingName(true)
+              }}
+            >
+              {session.name}
+            </span>
+          )}
           <span style={styles.badge}>{meta.label}</span>
           <span style={styles.status}>{status.label}</span>
           {running && <a style={styles.link} href={base} onClick={(e) => e.preventDefault()}>{base}</a>}
@@ -84,6 +124,9 @@ export function HttpMockView({ session }: { session: Session }): JSX.Element {
         </header>
 
         <div style={styles.toolbar}>
+          <button style={styles.ghost} title="监听地址与端口，改完自动按新参数重启" onClick={() => setListenOpen(true)}>
+            监听设置
+          </button>
           <button style={{ ...styles.ghost, background: 'var(--selected-bg)', color: 'var(--text-0)' }} onClick={() => setPanelOpen(true)}>路由配置</button>
           <button
             style={{
@@ -183,8 +226,18 @@ export function HttpMockView({ session }: { session: Session }): JSX.Element {
         </div>
       </div>
 
-      {panelOpen && <HttpMockPanel session={session} onClose={() => setPanelOpen(false)} />}
+      {panelOpen && (
+        <HttpMockPanel
+          session={session}
+          onClose={() => {
+            // 路由面板是逐字提交的，关闭时把最后一次防抖中的改动补发出去
+            flushPendingWrites()
+            setPanelOpen(false)
+          }}
+        />
+      )}
       {certOpen && <CertPanel session={session} onClose={() => setCertOpen(false)} />}
+      {listenOpen && <ListenPanel session={session} onClose={() => setListenOpen(false)} />}
       {recOpen && (
         <RecorderPanel
           session={session}
@@ -239,6 +292,18 @@ const styles: Record<string, React.CSSProperties> = {
   topbar: { display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, padding: '10px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg-1)' },
   dot: { width: 9, height: 9, borderRadius: 9 },
   title: { fontWeight: 600 },
+  titleInput: {
+    fontWeight: 600,
+    fontSize: 'inherit',
+    fontFamily: 'inherit',
+    color: 'var(--field-fg)',
+    background: 'var(--field-bg)',
+    border: '1px solid var(--field-border)',
+    borderRadius: 'var(--r-sm)',
+    padding: '2px 6px',
+    outline: 'none',
+    minWidth: 120
+  },
   badge: { fontSize: 'var(--fs-xs)', color: 'var(--text-1)', background: 'var(--btn2-bg)', border: '1px solid transparent', borderRadius: 'var(--r-sm)', padding: '2px 6px' },
   status: { fontSize: 'var(--fs-sm)', color: 'var(--text-1)' },
   link: { fontSize: 'var(--fs-sm)', color: 'var(--accent)', fontFamily: 'var(--font-mono)' },

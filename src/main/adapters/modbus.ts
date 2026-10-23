@@ -10,6 +10,7 @@ import type {
 } from '@shared/protocol'
 import { BaseAdapter } from './base'
 import { Backoff, formatWait, normalizeBackoff } from './reconnect'
+import { describeConnectError, describeSerialError } from './net-error'
 import {
   appendCrc,
   buildReadPdu,
@@ -122,7 +123,7 @@ export class ModbusAdapter extends BaseAdapter {
     socket.on('data', (chunk) => this.onBytes(chunk))
     socket.on('error', (err) => {
       clearTimeout(timer)
-      this.emitError(err.message)
+      this.emitError(describeConnectError(err, `${host}:${port}`))
     })
     socket.on('close', () => {
       clearTimeout(timer)
@@ -157,7 +158,7 @@ export class ModbusAdapter extends BaseAdapter {
       })
       this.port = port
       port.on('data', (chunk: Buffer) => this.onBytes(chunk))
-      port.on('error', (err: Error) => this.emitError(err.message))
+      port.on('error', (err: Error) => this.emitError(describeSerialError(err, path)))
       port.on('close', () => {
         this.stopPolling()
         this.failPending('串口已关闭')
@@ -181,7 +182,7 @@ export class ModbusAdapter extends BaseAdapter {
       )
       this.startPolling()
     } catch (e) {
-      const msg = String((e as Error)?.message ?? e)
+      const msg = describeSerialError(e as Error, path)
       this.emitError(msg)
       this.emitStatus('error', msg)
       this.scheduleReconnect()

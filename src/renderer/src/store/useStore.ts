@@ -92,6 +92,48 @@ const logBuffer = new Map<string, HttpLogEntry[]>()
 let rafHandle: number | null = null
 let timerHandle: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * 配置类 IPC 的合并写入。
+ *
+ * Mock 路由面板是「改一个字就提交」的受控表单，而主进程收到后会把整个
+ * workspace.json 同步落盘一次。编辑一段 200 字的响应体就是 200 次写盘，
+ * 既卡界面也伤磁盘。这里只延迟主进程写入，界面状态仍然即时更新，
+ * 用户感知不到差别；窗口关闭前统一 flush，不会丢最后一次修改。
+ */
+const pendingWrites = new Map<string, { timer: ReturnType<typeof setTimeout>; run: () => void }>()
+
+function scheduleWrite(key: string, run: () => void, delayMs = 280): void {
+  const prev = pendingWrites.get(key)
+  if (prev) clearTimeout(prev.timer)
+  const timer = setTimeout(() => {
+    pendingWrites.delete(key)
+    run()
+  }, delayMs)
+  pendingWrites.set(key, { timer, run })
+}
+
+function flushWrites(key?: string): void {
+  for (const k of key ? [key] : [...pendingWrites.keys()]) {
+    const pending = pendingWrites.get(k)
+    if (!pending) continue
+    clearTimeout(pending.timer)
+    pendingWrites.delete(k)
+    pending.run()
+  }
+}
+
+function cancelWrite(key: string): void {
+  const pending = pendingWrites.get(key)
+  if (!pending) return
+  clearTimeout(pending.timer)
+  pendingWrites.delete(key)
+}
+
+/** 立即把待写的配置发给主进程（面板关闭、窗口失焦时调用） */
+export function flushPendingWrites(): void {
+  flushWrites()
+}
+
 /** 后台兜底刷新间隔。取 120ms：肉眼无感，又不至于在高吞吐下把主线程占满 */
 const BACKGROUND_FLUSH_MS = 120
 
@@ -161,6 +203,13 @@ export const useStore = create<State>((set, get) => ({
   init: () => {
     if (get().initialized) return
     set({ initialized: true })
+
+    // 关窗/刷新/切走前把还没发出去的配置写掉，否则最后 280ms 内的编辑会丢
+    window.addEventListener('beforeunload', () => flushWrites())
+    window.addEventListener('blur', () => flushWrites())
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushWrites()
+    })
 
     window.toolbox.onEvent((event) => {
       if (event.type === 'frame') {
@@ -266,6 +315,20 @@ export const useStore = create<State>((set, get) => ({
     if (!src) return
     // 复制配置本体，名称加「副本」后缀；副本默认不自动连接，避免端口冲突
     const cfg = JSON.parse(JSON.stringify(src.config)) as SessionConfig
+    /*
+      MQTT 的 clientId 必须换。
+
+      Broker 按 clientId 识别会话：两条链路用同一个 id 连上来时，后连的会把
+      先连的踢掉，被踢的那条按自动重连接着连，于是两条链路互相踢，
+      日志上就是「连上→断开→连上→断开」无限循环。端口可以冲突（最多起不来），
+      clientId 冲突则是两条都能连上然后持续互踢，更难排查。
+    */
+    if (cfg.mqtt) {
+      cfg.mqtt = {
+        ...cfg.mqtt,
+        clientId: 'flowprobe-' + Math.random().toString(16).slice(2, 10)
+      }
+    }
     // 分组与标签一并带过去，副本天然落在同一分组里
     await get().createSession(src.kind, src.name + ' 副本', cfg, false, {
       group: src.group,
@@ -310,6 +373,22 @@ export const useStore = create<State>((set, get) => ({
   stop: (id) => window.toolbox.stopSession(id),
 
   remove: (id) => {
+    const target = get().sessions.find((x) => x.id === id)
+    if (!target) return
+    /*
+      删除是不可逆的：会话配置会从工作区移除，下次启动不再恢复。
+      历史库里的报文仍然保留（可在「报文历史」检索），这一点写进提示里，
+      否则用户会以为连历史也一起没了而不敢删。
+    */
+    if (
+      !window.confirm(
+        `删除会话「${target.name}」？\n\n会话配置会从工作区移除；已采集的报文仍保留在本地历史库，可在「报文历史」中检索。`
+      )
+    ) {
+      return
+    }
+    cancelWrite('mock:' + id)
+    cancelWrite('httpMock:' + id)
     window.toolbox.removeSession(id)
     frameBuffer.delete(id)
     logBuffer.delete(id)
@@ -341,7 +420,7 @@ export const useStore = create<State>((set, get) => ({
   },
   kickPeer: (id, peerId) => window.toolbox.kickPeer(id, peerId),
   updateMock: (id, cfg) => {
-    window.toolbox.updateMock(id, cfg)
+    scheduleWrite('mock:' + id, () => window.toolbox.updateMock(id, cfg))
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, config: { ...x.config, mock: cfg } } : x
@@ -349,7 +428,7 @@ export const useStore = create<State>((set, get) => ({
     }))
   },
   updateHttpMock: (id, cfg) => {
-    window.toolbox.updateHttpMock(id, cfg)
+    scheduleWrite('httpMock:' + id, () => window.toolbox.updateHttpMock(id, cfg))
     set((s) => ({
       sessions: s.sessions.map((x) =>
         x.id === id ? { ...x, config: { ...x.config, httpMock: cfg } } : x

@@ -3,6 +3,7 @@ import type { ConnectionKind, OutgoingFrame, SessionConfig } from '@shared/proto
 import { BaseAdapter } from './base'
 import { FrameSplitter, encodeContent } from '../codec/framing'
 import { Backoff, formatWait, normalizeBackoff } from './reconnect'
+import { describeSerialError } from './net-error'
 
 type Parity = 'none' | 'even' | 'odd' | 'mark' | 'space'
 
@@ -62,7 +63,7 @@ export class SerialAdapter extends BaseAdapter {
           void this.runMock(f, (bytes) => this.port?.write(bytes))
         }
       })
-      port.on('error', (err: Error) => this.emitError(err.message))
+      port.on('error', (err: Error) => this.emitError(describeSerialError(err, path)))
       port.on('close', () => {
         this.stopLineStatusPolling()
         this.emitStatus('closed', '串口已关闭')
@@ -101,7 +102,7 @@ export class SerialAdapter extends BaseAdapter {
       )
       this.startLineStatusPolling()
     } catch (e) {
-      const msg = (e as Error).message
+      const msg = describeSerialError(e as Error, path)
       this.emitError(msg)
       this.emitStatus('error', msg)
       this.scheduleReopen()

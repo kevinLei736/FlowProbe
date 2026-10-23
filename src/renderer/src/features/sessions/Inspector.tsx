@@ -3,6 +3,16 @@ import type { Peer, Session } from '@shared/protocol'
 import { useStore } from '../../store/useStore'
 import { KIND_META, keyHint } from '../../app/meta'
 import { collectGroups, useSessionOrg } from '../../store/useSessionOrg'
+import { Select } from '../../components/ui/Select'
+
+type ParamFieldType = 'text' | 'number' | 'lines' | 'csv' | 'bool' | 'select'
+
+interface ParamField {
+  key: string
+  label: string
+  type?: ParamFieldType
+  options?: { value: string; label: string }[]
+}
 
 export function Inspector({ session }: { session: Session }): JSX.Element {
   const peers = useStore((s) => s.peersBySession[session.id] ?? [])
@@ -103,29 +113,61 @@ export function Inspector({ session }: { session: Session }): JSX.Element {
    * 原来是一串嵌套三元表达式，每加一种连接类型就多一层缩进；改成查表后
    * 新协议只需加一行，也避免了漏写分支时静默落到空数组。
    */
-  const EDITABLE: Partial<Record<Session['kind'], { key: string; label: string; numeric?: boolean }[]>> = {
+  const EDITABLE: Partial<Record<Session['kind'], ParamField[]>> = {
     'tcp-client': [
       { key: 'host', label: '地址' },
-      { key: 'port', label: '端口', numeric: true }
+      { key: 'port', label: '端口', type: 'number' },
+      { key: 'autoReconnect', label: '断线自动重连', type: 'bool' }
     ],
-    'tcp-server': [{ key: 'port', label: '端口', numeric: true }],
-    'http-mock': [{ key: 'port', label: '端口', numeric: true }],
-    'ws-client': [{ key: 'url', label: 'URL' }],
+    'tcp-server': [
+      { key: 'host', label: '监听地址' },
+      { key: 'port', label: '端口', type: 'number' }
+    ],
+    'http-mock': [
+      { key: 'host', label: '监听地址' },
+      { key: 'port', label: '端口', type: 'number' }
+    ],
+    'ws-client': [
+      { key: 'url', label: 'URL' },
+      { key: 'headers', label: 'Header（每行 Key: Value）', type: 'lines' },
+      { key: 'subProtocols', label: '子协议（逗号分隔）', type: 'csv' },
+      { key: 'pingIntervalMs', label: 'Ping 间隔(ms)', type: 'number' },
+      { key: 'autoReconnect', label: '断线自动重连', type: 'bool' }
+    ],
     'ws-server': [
-      { key: 'port', label: '端口', numeric: true },
+      { key: 'port', label: '端口', type: 'number' },
       { key: 'path', label: '路径' }
     ],
     'udp-client': [
       { key: 'host', label: '默认目标地址' },
-      { key: 'port', label: '目标端口', numeric: true }
+      { key: 'port', label: '目标端口', type: 'number' },
+      { key: 'udpBindPort', label: '本地绑定端口', type: 'number' },
+      { key: 'udpBroadcast', label: '允许广播', type: 'bool' }
     ],
-    'udp-server': [{ key: 'udpBindPort', label: '监听端口', numeric: true }],
+    'udp-server': [
+      { key: 'udpBindHost', label: '监听地址' },
+      { key: 'udpBindPort', label: '监听端口', type: 'number' }
+    ],
     // 从站的端口在 modbusSlave.port 里，热改要走「数据区」面板的链路页；
     // 这里只放顶层镜像字段会造成两处不一致，故不开放
     'modbus-slave': [],
     serial: [
       { key: 'serialPath', label: '串口' },
-      { key: 'baudRate', label: '波特率', numeric: true }
+      { key: 'baudRate', label: '波特率', type: 'number' },
+      { key: 'dataBits', label: '数据位', type: 'number' },
+      { key: 'stopBits', label: '停止位', type: 'number' },
+      {
+        key: 'parity',
+        label: '校验位',
+        type: 'select',
+        options: [
+          { value: 'none', label: 'none' },
+          { value: 'even', label: 'even' },
+          { value: 'odd', label: 'odd' },
+          { value: 'mark', label: 'mark' },
+          { value: 'space', label: 'space' }
+        ]
+      }
     ]
   }
   const editableFields = EDITABLE[session.kind] ?? []
@@ -444,42 +486,136 @@ function ParamEditor({
   config,
   onSave
 }: {
-  fields: { key: string; label: string; numeric?: boolean }[]
+  fields: ParamField[]
   config: Record<string, unknown>
   onSave: (patch: Record<string, unknown>) => void
 }): JSX.Element {
+  /**
+   * 草稿统一按字符串存，渲染时再按 type 还原。
+   * 好处是「输入到一半」不会因为 Number('') = 0 把端口改成 0；
+   * 提交时才做校验，非法值直接保留原值。
+   */
   const [draft, setDraft] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {}
-    for (const f of fields) init[f.key] = String(config[f.key] ?? '')
+    for (const f of fields) {
+      const value = config[f.key]
+      if (f.type === 'lines') {
+        init[f.key] =
+          value && typeof value === 'object'
+            ? Object.entries(value as Record<string, string>)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join('\n')
+            : ''
+      } else if (f.type === 'csv') {
+        init[f.key] = Array.isArray(value) ? value.join(', ') : ''
+      } else if (f.type === 'bool') {
+        init[f.key] = value === true ? 'true' : 'false'
+      } else {
+        init[f.key] = String(value ?? '')
+      }
+    }
     return init
   })
 
+  const commit = (): void => {
+    const patch: Record<string, unknown> = {}
+    for (const f of fields) {
+      const raw = draft[f.key] ?? ''
+      switch (f.type) {
+        case 'number': {
+          const n = Number(raw)
+          // 空值或非法数字不提交，避免把端口写成 0 / NaN
+          if (raw.trim() === '' || Number.isNaN(n)) continue
+          patch[f.key] = n
+          break
+        }
+        case 'lines': {
+          const headers: Record<string, string> = {}
+          for (const line of raw.split('\n')) {
+            const idx = line.indexOf(':')
+            if (idx <= 0) continue
+            const k = line.slice(0, idx).trim()
+            if (k) headers[k] = line.slice(idx + 1).trim()
+          }
+          patch[f.key] = headers
+          break
+        }
+        case 'csv':
+          patch[f.key] = raw
+            .split(/[,，]/)
+            .map((v) => v.trim())
+            .filter(Boolean)
+          break
+        case 'bool':
+          patch[f.key] = raw === 'true'
+          break
+        default:
+          patch[f.key] = raw
+      }
+    }
+    onSave(patch)
+  }
+
   return (
     <div style={styles.paramBox}>
-      {fields.map((f) => (
-        <div key={f.key} style={styles.paramRow}>
-          <span style={styles.paramLabel}>{f.label}</span>
-          <input
-            style={styles.paramInput}
-            value={draft[f.key] ?? ''}
-            onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-          />
-        </div>
-      ))}
-      <button
-        style={styles.nameOk}
-        onClick={() => {
-          const patch: Record<string, unknown> = {}
-          for (const f of fields) {
-            const raw = draft[f.key] ?? ''
-            patch[f.key] = f.numeric ? Number(raw) : raw
-          }
-          onSave(patch)
-        }}
-      >
+      {fields.map((f) => {
+        if (f.type === 'bool') {
+          return (
+            <label key={f.key} style={styles.paramCheck}>
+              <input
+                type="checkbox"
+                checked={draft[f.key] === 'true'}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, [f.key]: e.target.checked ? 'true' : 'false' }))
+                }
+              />
+              {f.label}
+            </label>
+          )
+        }
+        if (f.type === 'lines') {
+          return (
+            <div key={f.key} style={styles.paramStack}>
+              <span style={styles.paramLabel}>{f.label}</span>
+              <textarea
+                style={styles.paramArea}
+                value={draft[f.key] ?? ''}
+                placeholder={'Authorization: Bearer xxx\nX-Tenant: demo'}
+                onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+              />
+            </div>
+          )
+        }
+        if (f.type === 'select') {
+          return (
+            <div key={f.key} style={styles.paramRow}>
+              <span style={styles.paramLabel}>{f.label}</span>
+              <Select
+                size="sm"
+                searchable={false}
+                value={draft[f.key] ?? ''}
+                options={f.options ?? []}
+                onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
+              />
+            </div>
+          )
+        }
+        return (
+          <div key={f.key} style={styles.paramRow}>
+            <span style={styles.paramLabel}>{f.label}</span>
+            <input
+              style={styles.paramInput}
+              value={draft[f.key] ?? ''}
+              inputMode={f.type === 'number' ? 'numeric' : undefined}
+              onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+            />
+          </div>
+        )
+      })}
+      <button style={styles.nameOk} onClick={commit}>
         应用并重建
       </button>
-      <div style={styles.hint}>应用后会断开当前连接，按新参数重建。</div>
+      <div style={styles.hint}>应用后会断开当前连接，并按新参数自动重连。</div>
     </div>
   )
 }
@@ -527,8 +663,11 @@ const styles: Record<string, React.CSSProperties> = {
   pathText: { marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-micro)', color: 'var(--text-2)', wordBreak: 'break-all' },
   paramBox: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, padding: 8, border: '1px solid var(--border-subtle)', borderRadius: 'var(--r-sm)', minWidth: 0 },
   paramRow: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 },
+  paramStack: { display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 },
   paramLabel: { fontSize: 'var(--fs-micro)', color: 'var(--text-2)' },
   paramInput: { width: '100%', minWidth: 0, background: 'var(--field-bg)', color: 'var(--field-fg)', border: '1px solid var(--field-border)', borderRadius: 'var(--r-sm)', padding: '4px 7px', fontSize: 'var(--fs-xs)', fontFamily: 'var(--font-mono)', outline: 'none' },
+  paramArea: { width: '100%', minWidth: 0, minHeight: 84, resize: 'vertical', background: 'var(--field-bg)', color: 'var(--field-fg)', border: '1px solid var(--field-border)', borderRadius: 'var(--r-sm)', padding: '6px 7px', fontSize: 'var(--fs-xs)', fontFamily: 'var(--font-mono)', lineHeight: 1.6, outline: 'none' },
+  paramCheck: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-xs)', color: 'var(--text-1)' },
   orgBox: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
   chipRow: { display: 'flex', flexWrap: 'wrap', gap: 5 },
   chipGhost: { padding: '2px 8px', background: 'var(--btn2-bg)', color: 'var(--text-2)', border: '1px solid transparent', borderRadius: 11, fontSize: 'var(--fs-micro)' },

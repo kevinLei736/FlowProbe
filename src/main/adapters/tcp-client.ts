@@ -3,6 +3,7 @@ import type { ConnectionKind, OutgoingFrame, SessionConfig } from '@shared/proto
 import { BaseAdapter } from './base'
 import { FrameSplitter, encodeContent } from '../codec/framing'
 import { Backoff, formatWait, normalizeBackoff } from './reconnect'
+import { describeConnectError } from './net-error'
 
 export class TcpClientAdapter extends BaseAdapter {
   readonly kind: ConnectionKind = 'tcp-client'
@@ -20,10 +21,20 @@ export class TcpClientAdapter extends BaseAdapter {
   }
 
   async start(): Promise<void> {
+    // 已连接或正在连接时忽略重复启动，避免多一次无意义的断开重连
+    const socket = this.socket
+    if (socket && !socket.destroyed && (socket.connecting || socket.readyState === 'open')) return
     this.manualStop = false
     this.everConnected = false
     this.backoff.update(normalizeBackoff(this.config))
     this.backoff.reset()
+    /*
+      先拆旧链路。
+
+      与 MQTT 同一个问题：重复 start 会把 this.socket 覆盖掉，旧 socket 仍然
+      连着对端但再也没人关它；它的 close 事件又会替新链路排重连。
+    */
+    this.teardown()
     this.connect()
   }
 
@@ -34,6 +45,7 @@ export class TcpClientAdapter extends BaseAdapter {
 
     const socket = new net.Socket()
     this.socket = socket
+    const current = (): boolean => this.socket === socket
     socket.setNoDelay(this.config.noDelay !== false)
     if (this.config.keepAlive) socket.setKeepAlive(true)
 
@@ -51,6 +63,7 @@ export class TcpClientAdapter extends BaseAdapter {
     )
 
     socket.connect(port, host, () => {
+      if (!current()) return
       clearTimeout(timer)
       const retried = this.backoff.attempts
       this.backoff.reset()
@@ -64,6 +77,7 @@ export class TcpClientAdapter extends BaseAdapter {
     })
 
     socket.on('data', (chunk: Buffer) => {
+      if (!current()) return
       const frames = this.splitter!.push(chunk)
       for (const f of frames) {
         this.emitData('rx', f, 'hex')
@@ -72,11 +86,13 @@ export class TcpClientAdapter extends BaseAdapter {
     })
 
     socket.on('error', (err) => {
+      if (!current()) return
       clearTimeout(timer)
-      this.emitError(err.message)
+      this.emitError(describeConnectError(err, `${host}:${port}`))
     })
 
     socket.on('close', () => {
+      if (!current()) return
       clearTimeout(timer)
       this.stopHeartbeat()
       if (this.manualStop) {
@@ -107,6 +123,8 @@ export class TcpClientAdapter extends BaseAdapter {
 
   private startHeartbeat(): void {
     if (!this.config.heartbeatEnabled) return
+    // 重连成功会再调一次；先清掉旧定时器，避免心跳按次数翻倍
+    this.stopHeartbeat()
     const interval = Number(this.config.heartbeatIntervalMs ?? 5000)
     this.heartbeatTimer = setInterval(() => {
       const enc = this.config.heartbeatEncoding ?? 'utf8'
@@ -136,9 +154,24 @@ export class TcpClientAdapter extends BaseAdapter {
   async stop(): Promise<void> {
     this.manualStop = true
     this.backoff.cancel()
+    const wasOpen = this.socket !== null
+    this.teardown()
+    if (wasOpen) {
+      this.emitStatus('closed', '连接已关闭')
+      this.emitConn('连接已关闭（手动停止）', 'info')
+    }
+  }
+
+  /** 断开并释放当前 socket；不发状态事件，由调用方决定怎么报 */
+  private teardown(): void {
     this.stopHeartbeat()
     this.splitter?.dispose()
-    this.socket?.destroy()
+    this.splitter = null
+    const socket = this.socket
     this.socket = null
+    if (socket) {
+      socket.removeAllListeners()
+      socket.destroy()
+    }
   }
 }

@@ -63,7 +63,7 @@ A dash means the protocol does not offer that item rather than that it is missin
 | Module | Core capability | Available features |
 |--------|-----------------|--------------------|
 | HTTP mock server | A real local HTTP(S) server standing in for your backend | 8 methods · 4 path matching styles · Query/Header refinement · static / template / script responses · per-route latency · scenario library · proxy pass-through · recording to routes · self-signed HTTPS |
-| HTTP API testing | A full API client | Query/Header tables · 4 body types · 3 auth schemes · environment variables · 4 assertion kinds · ordered collection runs · variable chaining · test reports · scheduled monitoring · HAR export |
+| HTTP API testing | A full API client | Query/Header tables · 4 body types · 3 auth schemes · environment variables · 4 assertion kinds · ordered collection runs · variable chaining · test reports · scheduled monitoring · HAR export · Postman / OpenAPI interop · CLI / CI |
 
 ### Analysis and observation modules
 
@@ -225,7 +225,7 @@ Template placeholders:
 
 **HTTPS**: ticking it generates a self-signed certificate, or you can supply your own pair; the certificate panel shows validity dates, SANs and whether the private key matches. Trusting a self-signed certificate on a phone still requires installing a root certificate, which is an OS-level constraint.
 
-Also available: a fixed delay per route to reproduce slow endpoints; a request log filterable by path, method and status code with HAR export; and listening on `127.0.0.1` by default, which you must widen to all interfaces for a phone to reach it (at which point anyone on the LAN can too).
+Also available: a fixed delay per route to reproduce slow endpoints; a request log filterable by path, method and status code with HAR export; and a listen panel where the address and port can be changed at any time without recreating the session. It defaults to `0.0.0.0` (reachable from the machine and the LAN); switch to `127.0.0.1` for local-only access. The panel lists the machine's LAN addresses, and a firewall hint appears when remote access still fails.
 
 ### HTTP API testing
 
@@ -249,6 +249,28 @@ Also available: a fixed delay per route to reproduce slow endpoints; a request l
 **Collections and batch runs**: store a group of requests as an ordered collection and run it in one click; fields from an earlier response can be extracted into variables for later steps (log in, take the token, then call business endpoints); the run produces a report with each assertion result, timing and failure reason, which you can export.
 
 **Scheduled monitoring**: a collection can run on a schedule and raise a system notification when an assertion fails. The scheduler lives in the app shell, so it **keeps running after you close the panel**.
+
+**Collection interop**: Postman Collection v2.1 and OpenAPI 3.x in both directions. Importing Postman keeps nested folders, query and header tables, the three auth schemes, and JSON or form bodies. Importing OpenAPI turns `paths` into requests, converts path parameters to `{{variables}}`, and generates a sendable JSON example from the schema. Export produces either a Postman collection or an OpenAPI 3.0 contract skeleton. Imports append to the current collection and never overwrite requests you have already tuned.
+
+**CLI / CI**: run a collection headlessly and report the result through the exit code.
+
+```bash
+FlowProbe.exe --run-collection ./collection.json \
+  --env ./env.json --env-name local \
+  --report ./report.json --delay 200 --stop-on-fail
+```
+
+| Option | Meaning |
+|--------|---------|
+| `--run-collection` | Collection file: FlowProbe JSON, a bare array, Postman, or OpenAPI |
+| `--env` / `--env-name` | Environment file and the environment to pick; a flat `{ "baseUrl": "..." }` object also works |
+| `--report` | Write a machine-readable JSON report with status, timing, assertions and extracted values |
+| `--delay` | Delay between steps in milliseconds |
+| `--stop-on-fail` | Skip remaining steps after a failure |
+
+Exit codes: `0` all passed, `1` at least one failure, `2` bad arguments or files.
+
+> The packaged Windows build is a GUI executable, so some terminals show no live output. Trust the exit code and always pass `--report` to read the full result.
 
 ### Packet analysis
 
@@ -352,7 +374,7 @@ Upgrading from 1.18.0 or earlier copies the data directory from `debug-toolbox` 
 | A server fails to start | The port is taken by another program, or it is a privileged port below 1024. Pick a higher one |
 | Everything arrives as garbage | Switch the display encoding to HEX. On serial, suspect baud rate and parity first; on network links, suspect that the peer speaks a binary protocol |
 | No devices in the serial port list | Hit refresh next to the port dropdown to re-enumerate; confirm the driver is installed, the cable is seated, and no other serial tool holds the port |
-| A phone cannot reach the local mock | The mock listens on `127.0.0.1` by default. Switch it to all interfaces, and confirm the phone is on the same subnet with the firewall allowing it |
+| A phone cannot reach the local mock | Open "Listen settings" and confirm the address is `0.0.0.0` rather than `127.0.0.1`. The same panel lists the LAN address to use, and a firewall rule must allow the port |
 | Modbus readings are astronomically large | Almost always a word-order or data-type mismatch. Use the slave simulator to serve a known value and reconcile against it |
 | Update check says the publisher has not enabled updates | You are on 1.20.0 or earlier, which shipped without an update endpoint. Install the new version manually once and auto-update takes over from there |
 

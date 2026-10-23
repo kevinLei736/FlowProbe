@@ -140,7 +140,11 @@ export function SessionView({
    */
   const caps = KIND_CAPS[session.kind]
   const status = STATUS_META[session.status]
-  const running = session.status === 'connected' || session.status === 'listening'
+  // connecting 也算「已占用」：此时再点一次启动会开出第二条链路
+  const running =
+    session.status === 'connected' ||
+    session.status === 'listening' ||
+    session.status === 'connecting'
   // 是否有「对端」概念：直接读能力矩阵，避免每加一种服务端都要来这里补 kind 判断
   const isServer = caps.peerTarget
   const isMqtt = session.kind === 'mqtt-client'

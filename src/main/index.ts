@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import * as os from 'node:os'
 import {
   IPC,
   type CreateSessionRequest,
@@ -26,6 +27,7 @@ import {
   type UpdateSettings
 } from '@shared/protocol'
 import { SessionManager } from './session-manager'
+import { parseCliArgs, runCli } from './cli/run'
 import { listSerialPorts } from './adapters/serial'
 import { sendHttpTest } from './http-test/client'
 import { clearWorkspace, workspacePath } from './persistence'
@@ -69,6 +71,30 @@ const DEV_TOOLS_ENABLED = !app.isPackaged
 
 // 单实例限制：同一时间只允许运行一个应用实例。
 // 抢锁失败说明已有实例在运行，本次进程直接退出，并由已存在的实例接管窗口聚焦。
+/*
+  命令行 / CI 模式。
+  必须在单实例锁之前判断：流水线里完全可能同时有一个 GUI 实例开着，
+  这时 CLI 仍然要能独立跑完并以退出码汇报结果，不能被「已有一个实例」挡回去。
+*/
+let cliParseFailed = false
+let cliOptions: ReturnType<typeof parseCliArgs> = null
+try {
+  cliOptions = parseCliArgs(process.argv)
+} catch (e) {
+  cliParseFailed = true
+  console.error(String((e as Error)?.message ?? e))
+}
+
+if (cliParseFailed) {
+  app.exit(2)
+} else if (cliOptions) {
+  void runCli(cliOptions)
+    .then((code) => app.exit(code))
+    .catch((e) => {
+      console.error('集合执行失败：' + String((e as Error)?.message ?? e))
+      app.exit(2)
+    })
+} else {
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 function focusExistingWindow(): void {
@@ -319,7 +345,11 @@ if (!gotSingleInstanceLock) {
       arch: process.arch,
       userData: app.getPath('userData'),
       workspacePath: workspacePath(),
-      historyPath: historyDbPath()
+      historyPath: historyDbPath(),
+      lanIps: Object.values(os.networkInterfaces())
+        .flatMap((list) => list ?? [])
+        .filter((info) => info.family === 'IPv4' && !info.internal)
+        .map((info) => info.address)
     }))
     // 打包版直接静默返回：渲染层已经不显示入口，这里是兜底（IPC 通道对渲染层始终可达）
     ipcMain.handle(IPC.appToggleDevTools, () => {
@@ -544,4 +574,6 @@ if (!gotSingleInstanceLock) {
     manager.disposeAll()
     if (process.platform !== 'darwin') app.quit()
   })
+}
+
 }

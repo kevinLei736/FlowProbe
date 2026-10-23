@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { useTheme } from '../store/useTheme'
 import { useLayout } from '../store/useLayout'
@@ -101,6 +101,32 @@ export function App(): JSX.Element {
   const [contextTarget, setContextTarget] = useState<ContextTarget | null>(null)
   // 标签拖到中栏右半边时的提示。只在拖拽过程中出现，平时不占任何空间
   const [dropHint, setDropHint] = useState(false)
+
+  /**
+   * 是否有浮层正在前台。
+   *
+   * 全局快捷键是挂在 window 上的：弹窗打开时按 Ctrl+W，会同时被弹窗和外壳
+   * 收到 —— 用户以为在操作弹窗，背后却关掉了一个标签页。这里用 ref 记录，
+   * 避免把十几个开关塞进快捷键 effect 的依赖里。
+   */
+  const modalOpenRef = useRef(false)
+  const paletteOpenRef = useRef(false)
+  paletteOpenRef.current = paletteOpen
+  modalOpenRef.current = Boolean(
+    dialogOpen ||
+      toolsOpen ||
+      apiOpen ||
+      monitorOpen ||
+      alertsOpen ||
+      marksOpen ||
+      paletteOpen ||
+      aboutOpen ||
+      shortcutsOpen ||
+      guideOpen ||
+      updateOpen ||
+      renameOpen ||
+      contextTarget
+  )
 
   /*
     巡检调度挂在外壳而不是接口测试面板：巡检的全部意义就是「界面关着也在跑」。
@@ -269,9 +295,16 @@ export function App(): JSX.Element {
       restartSession: () => {
         const id = focusedId()
         if (!id) return
-        useStore.getState().stop(id)
-        // 断开是异步的，稍等再拉起，否则服务端会话会撞到端口尚未释放
-        setTimeout(() => useStore.getState().start(id), 320)
+        /*
+          等 stop 真正完成再启动。
+          固定延时 320ms 对服务端不可靠：端口可能还没释放，新的 listen 直接
+          EADDRINUSE；对 MQTT 则是旧链路还占着 clientId，新链路连上就被踢。
+          stop 现在返回 Promise，按实际关闭完成时间接续才稳。
+        */
+        void (async () => {
+          await window.toolbox.stopSession(id)
+          await window.toolbox.startSession(id)
+        })()
       },
       renameSession: () => setRenameOpen(true),
       clearFrames: () => {
@@ -421,6 +454,15 @@ export function App(): JSX.Element {
         e.preventDefault()
         void window.toolbox.toggleDevTools()
         return
+      }
+      // 浮层打开时只保留缩放：其余快捷键交给浮层自己处理
+      if (modalOpenRef.current) {
+        const zoomCombo =
+          (e.ctrlKey || e.metaKey) && ['=', '+', '-', '_', '0'].includes(e.key)
+        // Ctrl+K 是命令面板自己的开关，面板打开时仍要能按它关掉
+        const paletteToggle =
+          paletteOpenRef.current && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'
+        if (!zoomCombo && !paletteToggle) return
       }
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return

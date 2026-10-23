@@ -1,6 +1,7 @@
 import * as http from 'node:http'
 import * as https from 'node:https'
 import * as zlib from 'node:zlib'
+import * as os from 'node:os'
 import { randomUUID } from 'node:crypto'
 import type {
   ConnectionKind,
@@ -10,6 +11,7 @@ import type {
   SessionConfig
 } from '@shared/protocol'
 import { BaseAdapter } from './base'
+import { describeListenError } from './net-error'
 import { HttpMockEngine, defaultHttpMockConfig, type ParsedRequest } from '../http-mock/engine'
 import { inspectCert } from '../tls/certStore'
 
@@ -22,6 +24,23 @@ const MAX_BODY = 5 * 1024 * 1024 // 5MB 请求体上限
  * 既能覆盖绝大多数业务响应，也不至于让工作区与历史库膨胀失控。
  */
 const MAX_LOG_BODY = 256 * 1024
+
+/**
+ * 本机局域网 IPv4 地址。
+ *
+ * 监听在 0.0.0.0 时服务其实已经对外可达，但界面上只显示 127.0.0.1，
+ * 用户会以为「只有本机能访问」，于是拿 127.0.0.1 去远程调，必然失败。
+ * 启动时把这些地址一并报出来，省掉一次 ipconfig。
+ */
+function lanAddresses(): string[] {
+  const out: string[] = []
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const info of list ?? []) {
+      if (info.family === 'IPv4' && !info.internal) out.push(info.address)
+    }
+  }
+  return out
+}
 
 /**
  * 按 content-encoding 解压响应正文。
@@ -64,7 +83,19 @@ export class HttpMockAdapter extends BaseAdapter {
   async start(): Promise<void> {
     const port = Number(this.config.port ?? 3000)
     const useHttps = this.config.https === true
-    this.emitStatus('connecting', `正在启动 HTTP Mock :${port}`)
+    /*
+      显式绑定地址。
+
+      server.listen(port) 省略 host 时，Node 在双栈机器上可能只落到 IPv6 的 ::，
+      局域网里的 IPv4 客户端就连不进来 —— 本机用 127.0.0.1 测试一切正常，
+      远程调用却一直转圈，很难往「绑定地址」上想。默认 0.0.0.0 保证 IPv4 可达，
+      需要只给本机用时在界面里改成 127.0.0.1。
+    */
+    const host = String(this.config.host ?? '0.0.0.0').trim() || '0.0.0.0'
+    this.emitStatus('connecting', `正在启动 HTTP Mock ${host}:${port}`)
+
+    // 重复启动先关掉旧监听，否则同一端口会撞 EADDRINUSE
+    if (this.server) await this.stop()
 
     const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
       this.handleRequest(req, res)
@@ -96,13 +127,27 @@ export class HttpMockAdapter extends BaseAdapter {
         this.server = http.createServer(handler)
       }
       this.server.on('error', (err: Error) => {
-        this.emitError(err.message)
-        this.emitStatus('error', err.message)
+        const msg = describeListenError(err, host, port)
+        this.emitError(msg)
+        this.emitStatus('error', msg)
+        // 监听失败时 server 对象仍然存在，不清掉的话下次 start 会以为还在跑
+        this.server = null
       })
-      this.server.listen(port, () => {
+      this.server.listen(port, host, () => {
         const scheme = useHttps ? 'https' : 'http'
-        this.emitStatus('listening', `监听中 ${scheme}://127.0.0.1:${port}`)
-        this.emitSystem(`HTTP Mock 服务已启动 ${scheme}://127.0.0.1:${port}`)
+        const local = `${scheme}://127.0.0.1:${port}`
+        const lan = host === '0.0.0.0' || host === '::' ? lanAddresses() : []
+        this.emitStatus('listening', `监听中 ${local}`)
+        this.emitSystem(
+          `HTTP Mock 服务已启动 ${local}` +
+            (lan.length ? `，局域网可用：${lan.map((ip) => `${scheme}://${ip}:${port}`).join('、')}` : '')
+        )
+        if (lan.length) {
+          this.emitSystem(
+            '远程仍无法访问时，检查系统防火墙是否放行该端口（Windows 首次监听会弹出授权框，选「允许」）。',
+            'warn'
+          )
+        }
       })
     } catch (e) {
       const msg = (e as Error).message
@@ -308,8 +353,18 @@ export class HttpMockAdapter extends BaseAdapter {
 
   async stop(): Promise<void> {
     await new Promise<void>((resolve) => {
-      if (this.server) this.server.close(() => resolve())
-      else resolve()
+      const server = this.server
+      if (!server) {
+        resolve()
+        return
+      }
+      // close() 只在还有活动连接时才会等；加兜底避免 keep-alive 连接把停止卡住
+      const timer = setTimeout(() => resolve(), 2000)
+      server.close(() => {
+        clearTimeout(timer)
+        resolve()
+      })
+      ;(server as http.Server & { closeAllConnections?: () => void }).closeAllConnections?.()
     })
     this.server = null
     this.emitStatus('closed', 'HTTP Mock 已停止')

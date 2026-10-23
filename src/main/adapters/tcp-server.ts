@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { ConnectionKind, OutgoingFrame, Peer, SessionConfig } from '@shared/protocol'
 import { BaseAdapter } from './base'
 import { FrameSplitter, encodeContent } from '../codec/framing'
+import { describeListenError } from './net-error'
 
 interface Client {
   peer: Peer
@@ -29,8 +30,11 @@ export class TcpServerAdapter extends BaseAdapter {
 
     server.on('connection', (socket) => this.handleClient(socket))
     server.on('error', (err) => {
-      this.emitError(err.message)
-      this.emitStatus('error', err.message)
+      const msg = describeListenError(err, host, port)
+      this.emitError(msg)
+      this.emitStatus('error', msg)
+      // 只有「还没监听成功」时才丢弃引用；已在运行的 server 出错仍需能 stop
+      if (!server.listening) this.server = null
     })
 
     server.listen(port, host, () => {

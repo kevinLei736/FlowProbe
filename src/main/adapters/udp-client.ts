@@ -2,6 +2,7 @@ import * as dgram from 'node:dgram'
 import type { ConnectionKind, OutgoingFrame, Peer, SessionConfig } from '@shared/protocol'
 import { BaseAdapter } from './base'
 import { encodeContent } from '../codec/framing'
+import { describeConnectError } from './net-error'
 
 /**
  * UDP 客户端。
@@ -27,6 +28,8 @@ export class UdpClientAdapter extends BaseAdapter {
   }
 
   async start(): Promise<void> {
+    // 已有套接字（绑定中或已就绪）时忽略重复启动，避免遗留一个没人管的旧 socket
+    if (this.socket) return
     const host = String(this.config.host ?? '127.0.0.1')
     const port = Number(this.config.port ?? 0)
     this.emitStatus('connecting', `正在准备 UDP 套接字 → ${host}:${port}`)
@@ -38,8 +41,24 @@ export class UdpClientAdapter extends BaseAdapter {
     this.socket = socket
 
     socket.on('error', (err) => {
-      this.emitError(err.message)
-      this.emitStatus('error', err.message)
+      const msg = describeConnectError(err, `${host}:${port}`)
+      this.emitError(msg)
+      this.emitStatus('error', msg)
+      // 绑定失败时 socket 不可用；清掉引用，让用户改完参数能重新启动
+      let bound = true
+      try {
+        socket.address()
+      } catch {
+        bound = false
+      }
+      if (!bound && this.socket === socket) {
+        try {
+          socket.close()
+        } catch {
+          // 忽略关闭异常
+        }
+        this.socket = null
+      }
     })
 
     socket.on('message', (msg, rinfo) => {

@@ -18,6 +18,7 @@ import {
 } from './useApiClient'
 import { CollectionRunner } from './CollectionRunner'
 import { historyToHarJson } from './harExport'
+import { exportOpenApi, exportPostman, importCollection } from '@shared/collection'
 import { Select } from '../../components/ui/Select'
 import { ResizableTextarea } from '../../components/ui/ResizableTextarea'
 
@@ -56,6 +57,7 @@ export function ApiClientPanel({
     history,
     load,
     saveRequest,
+    importRequests,
     removeRequest,
     addEnvironment,
     updateEnvironment,
@@ -79,8 +81,52 @@ export function ApiClientPanel({
   const [respView, setRespView] = useState<'pretty' | 'raw'>('pretty')
   const [assertResults, setAssertResults] = useState<AssertResult[]>([])
   const [curName, setCurName] = useState('未命名请求')
+  /**
+   * 当前编辑的是集合里的哪一条。
+   *
+   * 原来保存一律 `uid()` 新建，从集合里打开一条请求、改完再保存会变成第二条，
+   * 反复调参就会堆出一串同名副本。记住 id 后「保存」是更新，「新建」才换 id。
+   */
+  const [editingId, setEditingId] = useState<string | null>(null)
   // 导出结果提示。用面板内提示条而不是弹窗：导出是低风险动作，弹窗还要多点一次确认
   const [notice, setNotice] = useState('')
+
+  /**
+   * 集合互通。
+   *
+   * 导入只往当前集合里追加，同名接口不覆盖 —— 用户点「导入」通常是想把别人的
+   * 接口并进来对照，静默替换掉自己调好的那份（可能带着断言和变量）损失太大。
+   */
+  const importCollectionFile = async (): Promise<void> => {
+    const file = await window.toolbox.openTextFile('导入接口集合', ['json'])
+    if (!file) return
+    try {
+      const result = importCollection(file.content)
+      importRequests(result.requests)
+      const tip = result.warnings.length ? `，${result.warnings.length} 条提示` : ''
+      setNotice(`已从「${result.name}」导入 ${result.requests.length} 个请求${tip}`)
+    } catch (e) {
+      setNotice('导入失败：' + String((e as Error)?.message ?? e))
+    }
+  }
+
+  const exportCollection = async (format: 'postman' | 'openapi'): Promise<void> => {
+    if (collections.length === 0) {
+      setNotice('当前集合为空，先保存几个请求再导出')
+      return
+    }
+    const activeEnv = environments.find((e) => e.id === activeEnvId) ?? null
+    const baseName = activeEnv?.name?.trim() || 'FlowProbe Collection'
+    const content =
+      format === 'postman'
+        ? exportPostman(baseName, collections, activeEnv)
+        : exportOpenApi(baseName, collections, activeEnv)
+    const suffix = format === 'postman' ? 'postman_collection' : 'openapi'
+    const path = await window.toolbox.saveTextFile(`${baseName}.${suffix}.json`, content)
+    if (path) {
+      setNotice(`已导出 ${collections.length} 个请求（${format === 'postman' ? 'Postman v2.1' : 'OpenAPI 3.0'}）`)
+    }
+  }
 
   useEffect(() => {
     load()
@@ -93,6 +139,8 @@ export function ApiClientPanel({
   const patchAuth = (p: Partial<HttpAuth>): void => setReq((r) => ({ ...r, auth: { ...r.auth, ...p } }))
 
   const send = async (): Promise<void> => {
+    // 快捷键可能连按两次；请求还没回来时再发一次只会产生重复历史
+    if (sending) return
     setSending(true)
     setRes(null)
     setAssertResults([])
@@ -138,12 +186,30 @@ export function ApiClientPanel({
     setAssertions(item.assertions ?? [])
     setExtracts(item.extracts ?? [])
     setCurName(item.name)
+    setEditingId(item.id)
     setRes(null)
     setAssertResults([])
   }
 
+  const newRequest = (): void => {
+    setReq(blankRequest())
+    setAssertions([])
+    setExtracts([])
+    setCurName('未命名请求')
+    setEditingId(null)
+    setRes(null)
+    setAssertResults([])
+    setExtracted({})
+    setNotice('')
+  }
+
   const doSave = (): void => {
-    saveRequest({ id: uid(), name: curName || '未命名请求', request: req, assertions, extracts })
+    const id = editingId ?? uid()
+    const name = curName.trim() || '未命名请求'
+    saveRequest({ id, name, request: req, assertions, extracts })
+    setEditingId(id)
+    setCurName(name)
+    setNotice('已保存到集合')
   }
 
   const importCurl = (): void => {
@@ -153,6 +219,8 @@ export function ApiClientPanel({
       if (parsed) {
         setReq(parsed)
         setRes(null)
+        // 导入 cURL 视为一条新请求，保存时不应覆盖之前选中的那条
+        setEditingId(null)
       }
     }
   }
@@ -190,7 +258,20 @@ export function ApiClientPanel({
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
+      <div
+        style={styles.panel}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            onClose()
+            return
+          }
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault()
+            void send()
+          }
+        }}
+      >
         <div style={styles.header}>
           <span style={styles.title}>HTTP 接口测试</span>
           <span style={styles.spacer} />
@@ -219,11 +300,41 @@ export function ApiClientPanel({
 
         <div style={styles.body}>
           <div style={styles.left}>
-            <div style={styles.sideTitle}>集合</div>
+            <div style={styles.sideTitleRow}>
+              <span style={styles.sideTitle}>集合</span>
+              <span style={{ flex: 1 }} />
+              <button
+                style={styles.miniAction}
+                title="导入 Postman Collection v2.1 或 OpenAPI 3.x（JSON）"
+                onClick={() => void importCollectionFile()}
+              >
+                导入
+              </button>
+              <button
+                style={styles.miniAction}
+                title="导出为 Postman Collection v2.1"
+                onClick={() => void exportCollection('postman')}
+              >
+                Postman
+              </button>
+              <button
+                style={styles.miniAction}
+                title="导出为 OpenAPI 3.0 文档"
+                onClick={() => void exportCollection('openapi')}
+              >
+                OpenAPI
+              </button>
+            </div>
             <div style={styles.sideList}>
               {collections.length === 0 && <div style={styles.sideEmpty}>暂无保存的请求</div>}
               {collections.map((c) => (
-                <div key={c.id} style={styles.savedRow}>
+                <div
+                  key={c.id}
+                  style={{
+                    ...styles.savedRow,
+                    ...(c.id === editingId ? styles.savedRowActive : {})
+                  }}
+                >
                   <button style={styles.savedBtn} onClick={() => loadRequest(c)} title={c.request.url}>
                     <span style={styles.savedMethod}>{c.request.method}</span>
                     <span style={styles.savedName}>{c.name}</span>
@@ -284,6 +395,13 @@ export function ApiClientPanel({
                 style={styles.url}
                 value={req.url}
                 onChange={(e) => patch({ url: e.target.value })}
+                onKeyDown={(e) => {
+                  // 与浏览器地址栏一致：在 URL 里回车直接发送
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    void send()
+                  }
+                }}
                 placeholder="https://api.example.com/path 或 {{baseUrl}}/path"
               />
               <button style={styles.send} disabled={sending} onClick={send}>{sending ? '发送中…' : '发送'}</button>
@@ -291,7 +409,8 @@ export function ApiClientPanel({
 
             <div style={styles.nameBar}>
               <input style={styles.nameInput} value={curName} onChange={(e) => setCurName(e.target.value)} />
-              <button style={styles.ghost} onClick={doSave}>保存到集合</button>
+              <button style={styles.ghost} onClick={newRequest} title="清空当前表单，开始一条新请求">新建</button>
+              <button style={styles.ghost} onClick={doSave}>{editingId ? '保存修改' : '保存到集合'}</button>
               <button style={styles.ghost} onClick={importCurl}>导入 cURL</button>
               <button style={styles.ghost} onClick={exportCurl}>导出 cURL</button>
             </div>
@@ -686,9 +805,23 @@ const styles: Record<string, React.CSSProperties> = {
   body: { flex: 1, display: 'grid', gridTemplateColumns: '240px 1fr', minHeight: 0 },
   left: { display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, borderRight: '1px solid var(--border)', overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain', padding: 8, gap: 4 },
   sideTitle: { fontSize: 'var(--fs-xs)', color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: 0.5, padding: '8px 6px 2px' },
+  sideTitleRow: { display: 'flex', alignItems: 'center', gap: 4, padding: '8px 6px 2px' },
+  miniAction: {
+    padding: '2px 6px',
+    background: 'transparent',
+    color: 'var(--text-2)',
+    border: '1px solid var(--border-subtle)',
+    borderRadius: 'var(--r-xs)',
+    fontSize: 'var(--fs-micro)',
+    lineHeight: 1.5
+  },
   sideList: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
   sideEmpty: { fontSize: 'var(--fs-xs)', color: 'var(--text-2)', padding: '4px 6px' },
   savedRow: { display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 },
+  savedRowActive: {
+    background: 'var(--selected-bg)',
+    borderRadius: 'var(--r-sm)'
+  },
   savedBtn: { flex: 1, minWidth: 0, display: 'flex', gap: 6, alignItems: 'center', background: 'transparent', color: 'var(--text-0)', border: '1px solid transparent', borderRadius: 'var(--r-sm)', padding: '5px 6px', textAlign: 'left' },
   savedMethod: { fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-micro)', color: 'var(--accent)', width: 40, flexShrink: 0 },
   savedName: { fontSize: 'var(--fs-sm)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },

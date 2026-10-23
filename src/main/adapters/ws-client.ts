@@ -3,6 +3,7 @@ import type { ConnectionKind, OutgoingFrame, SessionConfig } from '@shared/proto
 import { BaseAdapter } from './base'
 import { encodeContent } from '../codec/framing'
 import { Backoff, formatWait, normalizeBackoff } from './reconnect'
+import { describeConnectError } from './net-error'
 
 export class WsClientAdapter extends BaseAdapter {
   readonly kind: ConnectionKind = 'ws-client'
@@ -18,10 +19,19 @@ export class WsClientAdapter extends BaseAdapter {
   }
 
   async start(): Promise<void> {
+    // 已连接或正在连接时忽略重复启动
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)
+    ) {
+      return
+    }
     this.manualStop = false
     this.everConnected = false
     this.backoff.update(normalizeBackoff(this.config))
     this.backoff.reset()
+    // 与 TCP / MQTT 一致：重复启动先拆旧链路，避免遗留连接继续驱动重连
+    this.teardown()
     this.connect()
   }
 
@@ -45,8 +55,10 @@ export class WsClientAdapter extends BaseAdapter {
       ? new WebSocket(url, protocols, opts)
       : new WebSocket(url, opts)
     this.ws = ws
+    const current = (): boolean => this.ws === ws
 
     ws.on('open', () => {
+      if (!current()) return
       const retried = this.backoff.attempts
       this.backoff.reset()
       this.everConnected = true
@@ -59,6 +71,7 @@ export class WsClientAdapter extends BaseAdapter {
       this.startPing()
     })
     ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+      if (!current()) return
       const buf = toBuffer(data)
       this.emitData('rx', buf, isBinary ? 'hex' : 'utf8')
       void this.runMock(buf, (bytes) => {
@@ -66,11 +79,20 @@ export class WsClientAdapter extends BaseAdapter {
         this.ws?.send(bin ? bytes : bytes.toString('utf8'), { binary: bin })
       })
     })
-    ws.on('ping', () => this.emitSystem('收到 Ping'))
-    ws.on('pong', () => this.emitSystem('收到 Pong'))
-    ws.on('error', (err: Error) => this.emitError(err.message))
+    ws.on('ping', () => {
+      if (current()) this.emitSystem('收到 Ping')
+    })
+    ws.on('pong', () => {
+      if (current()) this.emitSystem('收到 Pong')
+    })
+    ws.on('error', (err: Error) => {
+      if (!current()) return
+      this.emitError(describeConnectError(err, url))
+    })
     ws.on('close', (code: number, reason: Buffer) => {
+      if (!current()) return
       this.stopPing()
+      this.ws = null
       const r = reason?.toString() || ''
       this.emitStatus('closed', `连接关闭 code=${code}`)
       if (this.manualStop) {
@@ -101,6 +123,8 @@ export class WsClientAdapter extends BaseAdapter {
   private startPing(): void {
     const interval = Number(this.config.pingIntervalMs ?? 0)
     if (interval <= 0) return
+    // 重连成功会再调一次；先清掉旧定时器，避免 Ping 频率翻倍
+    this.stopPing()
     this.pingTimer = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.ping()
@@ -128,9 +152,26 @@ export class WsClientAdapter extends BaseAdapter {
   async stop(): Promise<void> {
     this.manualStop = true
     this.backoff.cancel()
+    const wasOpen = this.ws !== null
+    this.teardown()
+    if (wasOpen) {
+      this.emitStatus('closed', '连接已关闭')
+      this.emitConn('连接已关闭（手动停止）', 'info')
+    }
+  }
+
+  private teardown(): void {
     this.stopPing()
-    this.ws?.close()
+    const ws = this.ws
     this.ws = null
+    if (ws) {
+      ws.removeAllListeners()
+      try {
+        ws.terminate()
+      } catch {
+        // 忽略关闭异常
+      }
+    }
   }
 }
 

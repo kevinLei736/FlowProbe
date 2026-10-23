@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   ConnectionKind,
   FramingMode,
@@ -8,7 +8,7 @@ import type {
   SessionConfig
 } from '@shared/protocol'
 import { useStore } from '../../store/useStore'
-import { KIND_META } from '../../app/meta'
+import { KIND_META, keyHint } from '../../app/meta'
 import { defaultHttpMockConfig } from '../../features/http-mock/defaults'
 import { Select } from '../../components/ui/Select'
 import { ResizableTextarea } from '../../components/ui/ResizableTextarea'
@@ -141,6 +141,14 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }): JSX.Elem
   const createSession = useStore((s) => s.createSession)
   const [kind, setKind] = useState<ConnectionKind>('tcp-client')
   const [name, setName] = useState('')
+  /**
+   * 表单校验提示。
+   *
+   * 端口原来是直接 Number() 塞进配置的：输入「abc」会变成 NaN，
+   * 会话照建不误，直到点启动才抛出 listen(NaN) 之类的底层错误。
+   * 把问题拦在创建这一刻，用户才知道该改哪个框。
+   */
+  const [formError, setFormError] = useState('')
 
   const [host, setHost] = useState('127.0.0.1')
   const [port, setPort] = useState('9000')
@@ -255,7 +263,52 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSerial])
 
+  /** 创建前校验：把「建完才发现连不上」的问题提前到表单里 */
+  const validate = (): string => {
+    const portOk = (raw: string): boolean => {
+      const n = Number(raw)
+      return Number.isInteger(n) && n > 0 && n < 65536
+    }
+    if (isTcp && !host.trim()) return '请填写目标地址（服务端则填监听地址）'
+    if (isTcp && !portOk(port)) return '端口需为 1–65535 的整数'
+    if (isWsClient && !/^wss?:\/\//i.test(url.trim())) {
+      return 'WebSocket 地址需以 ws:// 或 wss:// 开头'
+    }
+    if (kind === 'ws-server' && !portOk(port)) return 'WebSocket 监听端口需为 1–65535 的整数'
+    if (isUdpClient) {
+      if (!udpHost.trim()) return '请填写 UDP 目标地址'
+      if (!portOk(udpPort)) return 'UDP 目标端口需为 1–65535 的整数'
+      const bind = Number(udpBindPort)
+      if (udpBindPort.trim() !== '' && bind !== 0 && !portOk(udpBindPort)) {
+        return '本地绑定端口需为 0（随机）或 1–65535'
+      }
+    }
+    if (isUdpServer) {
+      const effective = Number(udpBindPort) || Number(udpPort)
+      if (!Number.isInteger(effective) || effective <= 0 || effective >= 65536) {
+        return 'UDP 监听端口需为 1–65535 的整数'
+      }
+    }
+    if (isHttpMock && !portOk(httpPort)) return 'HTTP Mock 端口需为 1–65535 的整数'
+    if (isSerial && !serialPath.trim()) return '请选择串口'
+    if (isModbusTcp && !mbHost.trim()) return '请填写 Modbus 主机地址'
+    if (isModbusTcp && !portOk(mbPort)) return 'Modbus 端口需为 1–65535 的整数'
+    if (isSlave && slTransport !== 'rtu' && !portOk(slPort)) {
+      return '从站监听端口需为 1–65535 的整数'
+    }
+    if (isMqtt && !/^(mqtt|mqtts|ws|wss):\/\//i.test(mqttUrl.trim())) {
+      return 'MQTT 地址需以 mqtt://、mqtts://、ws:// 或 wss:// 开头'
+    }
+    return ''
+  }
+
   const submit = async (): Promise<void> => {
+    const error = validate()
+    if (error) {
+      setFormError(error)
+      return
+    }
+    setFormError('')
     const config: SessionConfig = {}
     if (isTcp) {
       config.host = host
@@ -423,6 +476,24 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }): JSX.Elem
     onClose()
   }
 
+  // Esc 关闭、Ctrl/⌘+Enter 创建：对话框里手不用离开键盘
+  const submitRef = useRef(submit)
+  submitRef.current = submit
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        void submitRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.dialog} onClick={(e) => e.stopPropagation()}>
@@ -434,7 +505,10 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }): JSX.Elem
             <button
               key={k}
               style={{ ...styles.kindBtn, ...(k === kind ? styles.kindActive : {}) }}
-              onClick={() => setKind(k)}
+              onClick={() => {
+                setKind(k)
+                setFormError('')
+              }}
             >
               <span style={{ ...styles.kindIcon, ...(k === kind ? styles.kindIconOn : {}) }}>{KIND_META[k].icon}</span>
               {KIND_META[k].label}
@@ -976,7 +1050,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }): JSX.Elem
               自动处理 CORS（允许跨域）
             </label>
             <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
-              创建后可在会话内「路由配置」面板编辑接口规则，内置健康检查与按 id 查询示例；HTTPS 证书在「证书」面板管理。
+              默认监听 0.0.0.0（本机与局域网都可访问），端口和监听地址可在会话内「监听设置」随时修改。创建后可在「路由配置」编辑接口规则，内置健康检查与按 id 查询示例；HTTPS 证书在「证书」面板管理。
             </div>
           </>
         )}
@@ -986,9 +1060,10 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }): JSX.Elem
           下次打开应用时自动连接
         </label>
 
+        {formError && <div style={styles.formError}>{formError}</div>}
         <div style={styles.actions}>
           <button style={styles.cancel} onClick={onClose}>取消</button>
-          <button style={styles.confirm} onClick={submit}>创建</button>
+          <button style={styles.confirm} onClick={submit}>{`创建 (${keyHint('Ctrl+Enter')})`}</button>
         </div>
       </div>
     </div>
@@ -1122,6 +1197,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 'var(--r-md)'
   },
   advHint: { fontSize: 'var(--fs-xs)', lineHeight: 1.6, color: 'var(--text-2)', marginTop: 2 },
+  formError: {
+    marginTop: 12,
+    padding: '6px 9px',
+    fontSize: 'var(--fs-sm)',
+    color: 'var(--error)',
+    border: '1px solid var(--error)',
+    borderRadius: 'var(--r-sm)',
+    background: 'transparent'
+  },
   actions: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 },
   cancel: {
     height: 'var(--control-h)',

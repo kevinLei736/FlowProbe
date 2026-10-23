@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MqttConfig, MqttSubscription, Session } from '@shared/protocol'
 import { useStore } from '../../store/useStore'
 import {
@@ -44,20 +44,68 @@ export function MqttPanel({
   const [subs, setSubs] = useState<MqttSubscription[]>(cfg.subscriptions ?? [])
   const [draft, setDraft] = useState<MqttConfig>({ ...cfg })
   const isV5 = draft.protocolVersion === 5
+  const subsRef = useRef(subs)
+  const pendingSubs = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    subsRef.current = subs
+  }, [subs])
 
   const dirtyConn = useMemo(
     () => JSON.stringify({ ...draft, subscriptions: [] }) !== JSON.stringify({ ...cfg, subscriptions: [] }),
     [draft, cfg]
   )
 
-  const commitSubs = (next: MqttSubscription[]): void => {
-    setSubs(next)
-    updateSubs(session.id, next)
+  /**
+   * 订阅表提交。
+   *
+   * 主题过滤器是逐字输入的受控框，原来每敲一个字符就调一次增量订阅：
+   * 输入 sensor/+/temp 的过程中会先订阅 s、se、sen……，Broker 那边不仅
+   * 收到一串无意义的 SUBSCRIBE，还可能真的把大量消息推过来。
+   * 现在文字输入延迟 400ms 合并提交，失焦或回车立即提交；
+   * 勾选、QoS、增删这类离散操作仍然立即生效。
+   */
+  const flushSubs = (): void => {
+    if (pendingSubs.current) {
+      clearTimeout(pendingSubs.current)
+      pendingSubs.current = null
+    }
+    updateSubs(session.id, subsRef.current)
   }
 
-  const patchSub = (id: string, patch: Partial<MqttSubscription>): void => {
-    commitSubs(subs.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+  const commitSubs = (next: MqttSubscription[], immediate = true): void => {
+    subsRef.current = next
+    setSubs(next)
+    if (pendingSubs.current) {
+      clearTimeout(pendingSubs.current)
+      pendingSubs.current = null
+    }
+    if (immediate) {
+      updateSubs(session.id, next)
+    } else {
+      pendingSubs.current = setTimeout(() => {
+        pendingSubs.current = null
+        updateSubs(session.id, subsRef.current)
+      }, 400)
+    }
   }
+
+  const patchSub = (id: string, patch: Partial<MqttSubscription>, immediate = true): void => {
+    // 以 ref 为准：连续快速输入时 state 可能还没提交到本次渲染
+    commitSubs(subsRef.current.map((s) => (s.id === id ? { ...s, ...patch } : s)), immediate)
+  }
+
+  // 关闭面板时把还在等待的过滤器改动补发出去
+  useEffect(
+    () => () => {
+      if (pendingSubs.current) {
+        clearTimeout(pendingSubs.current)
+        pendingSubs.current = null
+        updateSubs(session.id, subsRef.current)
+      }
+    },
+    [session.id, updateSubs]
+  )
 
   const applyConn = (): void => {
     updateConfig(session.id, { mqtt: { ...draft, subscriptions: subs } })
@@ -92,7 +140,11 @@ export function MqttPanel({
                 style={{ ...fieldSm, flex: 1, fontFamily: 'var(--font-mono)' }}
                 value={s.filter}
                 placeholder="sensor/+/temperature"
-                onChange={(e) => patchSub(s.id, { filter: e.target.value })}
+                onChange={(e) => patchSub(s.id, { filter: e.target.value }, false)}
+                onBlur={flushSubs}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') flushSubs()
+                }}
               />
               <Select
                 size="sm"

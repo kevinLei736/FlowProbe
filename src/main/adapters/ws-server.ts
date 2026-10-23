@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { ConnectionKind, OutgoingFrame, Peer, SessionConfig } from '@shared/protocol'
 import { BaseAdapter } from './base'
 import { encodeContent } from '../codec/framing'
+import { describeListenError } from './net-error'
 
 interface Client {
   peer: Peer
@@ -20,21 +21,31 @@ export class WsServerAdapter extends BaseAdapter {
 
   async start(): Promise<void> {
     const port = Number(this.config.port ?? 0)
+    const host = String(this.config.host ?? '0.0.0.0')
     const path = String(this.config.path ?? '/')
-    this.emitStatus('connecting', `正在监听 :${port}${path}`)
+    this.emitStatus('connecting', `正在监听 ${host}:${port}${path}`)
 
     try {
-      const wss = new WebSocketServer({ port, path })
+      const wss = new WebSocketServer({ port, host, path })
       this.wss = wss
 
       wss.on('connection', (ws, req) => this.handleClient(ws, req))
       wss.on('error', (err: Error) => {
-        this.emitError(err.message)
-        this.emitStatus('error', err.message)
+        const msg = describeListenError(err, host, port)
+        this.emitError(msg)
+        this.emitStatus('error', msg)
+        if (!wss.address()) {
+          try {
+            wss.close()
+          } catch {
+            // 忽略关闭异常
+          }
+          if (this.wss === wss) this.wss = null
+        }
       })
       wss.on('listening', () => {
-        this.emitStatus('listening', `监听中 :${port}${path}`)
-        this.emitConn(`WebSocket 服务端已启动 :${port}${path}`, 'success')
+        this.emitStatus('listening', `监听中 ${host}:${port}${path}`)
+        this.emitConn(`WebSocket 服务端已启动 ${host}:${port}${path}`, 'success')
       })
     } catch (e) {
       const msg = (e as Error).message

@@ -197,12 +197,25 @@ export function VirtualList<T>({
     }
   })
 
-  // 黏底：仅在数据增加或总高变化（行高实测修正）后贴到最新，
-  // 这样用户主动往上翻时不会被强行拽回底部。
+  /*
+    黏底：只在「用户本来就停在底部」时贴到最新。
+
+    原来这里只看 stickToBottom，数据一涨就无条件把 scrollTop 拉到最底，
+    用户往上翻着看历史时每来一帧就被拽回去，长时间抓包基本没法读。
+    现在按 atBottom 判断：用户主动往上翻过，就保持当前位置；
+    重新滚回底部或手动重新勾选「自动滚动」时再恢复跟随。
+  */
+  const followRef = useRef(stickToBottom)
   useLayoutEffect(() => {
-    if (!stickToBottom) return
+    if (!stickToBottom) {
+      followRef.current = false
+      return
+    }
     const el = scroller.current
     if (!el) return
+    const justEnabled = !followRef.current
+    followRef.current = true
+    if (!justEnabled && !atBottom.current) return
     el.scrollTop = el.scrollHeight
     scrollTop.current = el.scrollTop
     atBottom.current = true

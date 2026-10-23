@@ -2,6 +2,7 @@ import * as dgram from 'node:dgram'
 import type { ConnectionKind, OutgoingFrame, Peer, SessionConfig } from '@shared/protocol'
 import { BaseAdapter } from './base'
 import { encodeContent } from '../codec/framing'
+import { describeListenError } from './net-error'
 
 interface UdpPeer {
   peer: Peer
@@ -32,8 +33,17 @@ export class UdpServerAdapter extends BaseAdapter {
   }
 
   async start(): Promise<void> {
-    const port = Number(this.config.port ?? this.config.udpBindPort ?? 0)
-    const host = String(this.config.host ?? this.config.udpBindHost ?? '0.0.0.0')
+    // 已有套接字（绑定中或已就绪）时忽略重复启动
+    if (this.socket) return
+    /*
+      绑定字段优先。
+
+      udpBindPort / udpBindHost 是「服务端监听」的专用字段，port / host 只是
+      新建会话时顺手写入的镜像值。原来的顺序是 port 优先，导致界面上改
+      「监听端口」完全不起作用 —— config.port 永远存在，udpBindPort 永远读不到。
+    */
+    const port = Number(this.config.udpBindPort ?? this.config.port ?? 0)
+    const host = String(this.config.udpBindHost ?? this.config.host ?? '0.0.0.0')
     this.emitStatus('connecting', `正在绑定 ${host}:${port}`)
 
     const socket = dgram.createSocket({
@@ -43,8 +53,23 @@ export class UdpServerAdapter extends BaseAdapter {
     this.socket = socket
 
     socket.on('error', (err) => {
-      this.emitError(err.message)
-      this.emitStatus('error', err.message)
+      const msg = describeListenError(err, host, port)
+      this.emitError(msg)
+      this.emitStatus('error', msg)
+      let bound = true
+      try {
+        socket.address()
+      } catch {
+        bound = false
+      }
+      if (!bound && this.socket === socket) {
+        try {
+          socket.close()
+        } catch {
+          // 忽略关闭异常
+        }
+        this.socket = null
+      }
     })
 
     socket.on('message', (msg, rinfo) => {

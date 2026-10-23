@@ -200,14 +200,20 @@ export class SessionManager {
    * 修改连接参数。运行中的会话会先停止，由调用方决定是否重新启动，
    * 因为多数适配器的参数只在建立连接时生效。
    */
-  updateConfig(id: string, config: SessionConfig): void {
+  async updateConfig(id: string, config: SessionConfig): Promise<void> {
     const entry = this.entries.get(id)
     if (!entry) return
     const wasRunning =
       entry.session.status === 'connected' ||
       entry.session.status === 'listening' ||
       entry.session.status === 'connecting'
-    if (wasRunning) entry.adapter.stop().catch(() => undefined)
+    /*
+      先等旧适配器真的停下来，再建新的。
+      原来这里是「发一个 stop 就不管了」：对服务端来说端口还没释放，新适配器
+      立刻 listen 会撞 EADDRINUSE；对 MQTT 来说旧链路还占着 clientId，
+      新链路连上就被 Broker 踢掉，表现成一直重连。
+    */
+    if (wasRunning) await entry.adapter.stop().catch(() => undefined)
 
     const merged: SessionConfig = { ...entry.session.config, ...config }
     entry.session.config = merged
@@ -223,6 +229,8 @@ export class SessionManager {
     entry.session.status = 'idle'
     this.emit({ type: 'status', sessionId: id, status: 'idle', detail: '参数已更新' })
     this.persist()
+    // 改参数前是跑着的，改完就按新参数自动拉起来，省掉「改完还得再点一次启动」
+    if (wasRunning) this.start(id)
   }
 
   /**
@@ -322,13 +330,24 @@ export class SessionManager {
   }
 
   start(id: string): void {
-    this.entries.get(id)?.adapter.start().catch((e) =>
+    const entry = this.entries.get(id)
+    if (!entry) return
+    /*
+      幂等启动。界面上「启动」按钮在 connecting 阶段仍然可点，连点两下就会
+      同时开两条链路：服务端撞端口，客户端撞 clientId（MQTT 尤其明显，
+      两条同 clientId 的链路会互相把对方踢下线，看起来就是无限断连）。
+    */
+    const status = entry.session.status
+    if (status === 'connected' || status === 'listening' || status === 'connecting') return
+    entry.adapter.start().catch((e) =>
       this.emit({ type: 'error', sessionId: id, message: String(e?.message ?? e) })
     )
   }
 
-  stop(id: string): void {
-    this.entries.get(id)?.adapter.stop().catch(() => undefined)
+  async stop(id: string): Promise<void> {
+    const entry = this.entries.get(id)
+    if (!entry) return
+    await entry.adapter.stop().catch(() => undefined)
   }
 
   remove(id: string): void {

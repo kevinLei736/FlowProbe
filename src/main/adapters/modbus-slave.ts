@@ -11,6 +11,7 @@ import type {
   SessionConfig
 } from '@shared/protocol'
 import { BaseAdapter } from './base'
+import { describeListenError, describeSerialError } from './net-error'
 import { appendCrc, checkCrc, wrapMbap } from '../modbus/pdu'
 import { ModbusSlaveStore, areaLabel, defaultSlaveConfig } from '../modbus/slave'
 
@@ -105,9 +106,7 @@ export class ModbusSlaveAdapter extends BaseAdapter {
     })
 
     server.on('error', (err) => {
-      const msg = (err as NodeJS.ErrnoException).code === 'EADDRINUSE'
-        ? `端口 ${port} 已被占用。Modbus 默认端口 502 在部分系统上需要管理员权限，可改用 5020 等高位端口`
-        : err.message
+      const msg = describeListenError(err, host, port)
       this.emitError(msg)
       this.emitStatus('error', msg)
     })
@@ -142,7 +141,7 @@ export class ModbusSlaveAdapter extends BaseAdapter {
       })
       this.port = sp
       sp.on('data', (chunk: Buffer) => this.onSerialBytes(chunk))
-      sp.on('error', (err: Error) => this.emitError(err.message))
+      sp.on('error', (err: Error) => this.emitError(describeSerialError(err, path)))
       sp.on('close', () => {
         this.stopAnimation()
         this.emitStatus('closed', '串口已关闭')
@@ -157,7 +156,7 @@ export class ModbusSlaveAdapter extends BaseAdapter {
       this.describeRegions()
       this.startAnimation()
     } catch (e) {
-      const msg = String((e as Error)?.message ?? e)
+      const msg = describeSerialError(e as Error, path)
       this.emitError(msg)
       this.emitStatus('error', msg)
     }

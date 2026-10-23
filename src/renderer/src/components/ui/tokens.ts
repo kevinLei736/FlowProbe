@@ -86,7 +86,7 @@ export const btnPrimary: CSSProperties = {
 /**
  * 次级操作：淡色叠加填充、无描边。
  * 之所以不给边框：深色主题下密集排列的描边按钮会连成一片「白色网格」，
- * 这是之前反复被指出的观感问题。用极淡的填充区分层级更贴近 ChatGPT 的做法。
+ * 这是之前反复被指出的观感问题。用极淡的填充区分层级，与主流桌面工具的层级处理一致。
  */
 export const btnSecondary: CSSProperties = {
   ...btnBase,
